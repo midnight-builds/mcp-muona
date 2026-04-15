@@ -1,0 +1,31 @@
+{
+	"name": "mcp-ruoka",
+	"module": "src/index.ts",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"mcp-ruoka": "src/index.ts"
+	},
+	"scripts": {
+		"dev": "bun run --watch src/index.ts",
+		"build": "bun build src/index.ts --outdir dist --target bun",
+		"start": "bun run dist/index.js",
+		"check": "bunx biome check --write .",
+		"typecheck": "bunx tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.11",
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"pino": "^10.3.1",
+		"playwright": "^1.59.1",
+		"playwright-extra": "^4.3.6",
+		"puppeteer-extra-plugin-stealth": "^2.11.2",
+		"zod": "^4.3.6"
+	}
+}

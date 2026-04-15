@@ -1,0 +1,14 @@
+{
+	"name": "ruoka",
+	"owner": {
+		"name": "p18a"
+	},
+	"plugins": [
+		{
+			"name": "ruoka",
+			"source": "./",
+			"description": "Search Finnish grocery and alcohol products across k-ruoka.fi, s-kaupat.fi, and alko.fi via MCP",
+			"version": "0.2.0"
+		}
+	]
+}

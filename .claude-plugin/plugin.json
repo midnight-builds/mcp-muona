@@ -1,0 +1,10 @@
+{
+	"name": "ruoka",
+	"description": "Search Finnish grocery and alcohol products across K-Ruoka, S-Kaupat, and Alko via MCP",
+	"version": "0.2.0",
+	"author": {
+		"name": "p18a"
+	},
+	"repository": "https://github.com/p18a/mcp-ruoka",
+	"license": "MIT"
+}
