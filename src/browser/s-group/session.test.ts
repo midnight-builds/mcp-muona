@@ -16,6 +16,7 @@ import {
 	HOUR,
 	harness,
 	MINUTE,
+	ostoslistaTarget,
 	START,
 	tick,
 	ticks,
@@ -547,10 +548,7 @@ describe("keepalive", () => {
 		await session.get("/warm", {}, BodySchema);
 		const flowHeld = deferred();
 		idp.hold = flowHeld.promise;
-		const flow = session.runSilentIdpFlow("ostoslista", {
-			startUrl: "https://kirjautuminen.s-ostoslista.fi/login",
-			isCallback: (url) => url.includes("nonce="),
-		});
+		const flow = session.runSilentIdpFlow("ostoslista", ostoslistaTarget());
 		await ticks();
 		expect(session.report().idpLease.exclusive).toBe("ostoslista");
 		const ticking = clock.advance(6 * MINUTE);
@@ -573,10 +571,7 @@ describe("keepalive", () => {
 		await clock.advance(5 * MINUTE);
 		const flowHeld = deferred();
 		idp.hold = flowHeld.promise;
-		const flow = session.runSilentIdpFlow("ostoslista", {
-			startUrl: "https://kirjautuminen.s-ostoslista.fi/login",
-			isCallback: (url) => url.includes("nonce="),
-		});
+		const flow = session.runSilentIdpFlow("ostoslista", ostoslistaTarget());
 		await ticks();
 		const ticking = clock.advance(MINUTE);
 		await ticks();

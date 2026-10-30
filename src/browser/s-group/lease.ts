@@ -23,7 +23,9 @@ export interface IdpLease {
 	// Never waits for a human login: anything but a human restart is denied.
 	// Resolves with the release for this one acquisition: a caller that gave
 	// up while waiting can only ever free its own grant, never a later one's.
-	acquireExclusive(holder: LeaseHolder): Promise<() => void>;
+	// abandon: checked whenever the lease changes hands; once true the wait
+	// ends with login_in_progress instead of running into its timeout.
+	acquireExclusive(holder: LeaseHolder, opts?: { abandon?: () => boolean }): Promise<() => void>;
 	// A relogin that stopped at a human step keeps its page open for the human,
 	// so the lease changes hands without ever being free in between. The grant
 	// stays the same, so the original release still frees it.
@@ -116,8 +118,9 @@ export function createIdpLease(clock: Clock): IdpLease {
 			};
 		},
 
-		async acquireExclusive(holder) {
+		async acquireExclusive(holder, opts) {
 			const deadline = clock.now() + SILENT_WAIT_MS;
+			const abandoned = () => opts?.abandon?.() ?? false;
 			pendingExclusive++;
 			try {
 				for (;;) {
@@ -126,10 +129,19 @@ export function createIdpLease(clock: Clock): IdpLease {
 						throw humanHoldsError(`a ${holder} login`);
 					}
 					if (exclusive() === null) break;
+					if (abandoned()) {
+						logger.info({ holder, current: exclusive() }, "IdP lease wait abandoned");
+						throw new SessionExpiredError(
+							"login_in_progress",
+							`The IdP lease wait was abandoned while ${exclusive()} holds it.`,
+						);
+					}
 					logger.info({ holder, current: exclusive() }, "Waiting for the IdP lease");
 					const free = await waitUntil(
 						() =>
-							exclusive() === null || (holder !== "human_login" && exclusive() === "human_login"),
+							exclusive() === null ||
+							abandoned() ||
+							(holder !== "human_login" && exclusive() === "human_login"),
 						deadline - clock.now(),
 					);
 					if (!free) {
