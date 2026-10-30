@@ -79,6 +79,14 @@ describe("resolveItems", () => {
 		]);
 	});
 
+	test("the store's product name wins over the search name", () => {
+		const [item] = resolveItems(
+			[{ ean: milk.ean, name: "rasvaton maito" }],
+			[milk],
+		).productResolvedItems;
+		expect(item?.name).toBe(milk.name);
+	});
+
 	test("defaults quantity to 1 and the unit to the product's price unit", () => {
 		const [item] = resolveItems([{ ean: milk.ean }], [milk]).productResolvedItems;
 		expect(item?.quantity).toBe(1);
@@ -187,26 +195,46 @@ describe("shopping list API", () => {
 		]);
 	});
 
-	test("createShoppingList resolves EANs in the list's store first", async () => {
+	// products/productByEan answer "Not Authorized" for this client (live
+	// 2026-10-30), so EANs are matched in a store search by the product name.
+	test("createShoppingList finds EAN items by searching their name in the store", async () => {
 		const { call, calls } = fakeGql({
-			ProductsByEans: { products: { items: [milk] } },
+			ProductSearchInStore: { productSearch: { items: [milk], maybeHasMore: false } },
 			CreateShoppingList: { createShoppingList: list() },
 		});
 		await createShoppingListApi(call).createShoppingList({
 			name: "Viikko",
 			storeId: "513971200",
 			mode: "PLAN",
-			items: [{ ean: milk.ean }],
+			items: [{ ean: milk.ean, name: milk.name }],
 		});
 		expect(calls[0]).toEqual({
-			op: "ProductsByEans",
-			variables: { eans: [milk.ean], storeId: "513971200", pageSize: 1 },
+			op: "ProductSearchInStore",
+			variables: { storeId: "513971200", query: milk.name, pageSize: 20 },
 		});
-		expect(calls[1]?.variables.productResolvedItems).toHaveLength(1);
+		expect(calls[1]?.variables.productResolvedItems).toEqual([
+			expect.objectContaining({ ean: milk.ean, sokId: milk.id, name: milk.name }),
+		]);
 	});
 
-	test("createShoppingList with an unknown EAN creates nothing", async () => {
-		const { call, calls } = fakeGql({ ProductsByEans: { products: { items: [] } } });
+	test("an EAN the name search does not return creates nothing", async () => {
+		const other = { ...milk, ean: "6400000000000" };
+		const { call, calls } = fakeGql({
+			ProductSearchInStore: { productSearch: { items: [other], maybeHasMore: true } },
+		});
+		await expect(
+			createShoppingListApi(call).createShoppingList({
+				name: "Viikko",
+				storeId: "513971200",
+				mode: "PLAN",
+				items: [{ ean: milk.ean, name: milk.name }],
+			}),
+		).rejects.toThrow(milk.ean);
+		expect(calls.map((c) => c.op)).toEqual(["ProductSearchInStore"]);
+	});
+
+	test("an EAN item without a name is refused before any call", async () => {
+		const { call, calls } = fakeGql({});
 		await expect(
 			createShoppingListApi(call).createShoppingList({
 				name: "Viikko",
@@ -214,8 +242,8 @@ describe("shopping list API", () => {
 				mode: "PLAN",
 				items: [{ ean: milk.ean }],
 			}),
-		).rejects.toThrow(milk.ean);
-		expect(calls.map((c) => c.op)).toEqual(["ProductsByEans"]);
+		).rejects.toThrow(/name/);
+		expect(calls).toEqual([]);
 	});
 
 	test("createShoppingList returning null is an error", async () => {
@@ -233,13 +261,16 @@ describe("shopping list API", () => {
 	test("addItems looks up EANs in the store of the list", async () => {
 		const { call, calls } = fakeGql({
 			GetShoppingListById: { shoppingList: list() },
-			ProductsByEans: { products: { items: [milk] } },
+			ProductSearchInStore: { productSearch: { items: [milk], maybeHasMore: false } },
 			BatchInsertShoppingListItem: { batchInsertShoppingListItem: list([freeTextItem]) },
 		});
-		await createShoppingListApi(call).addItems("l1", [{ ean: milk.ean }, { name: "maito" }]);
+		await createShoppingListApi(call).addItems("l1", [
+			{ ean: milk.ean, name: milk.name },
+			{ name: "maito" },
+		]);
 		expect(calls.map((c) => c.op)).toEqual([
 			"GetShoppingListById",
-			"ProductsByEans",
+			"ProductSearchInStore",
 			"BatchInsertShoppingListItem",
 		]);
 		expect(calls[1]?.variables.storeId).toBe("513971200");
