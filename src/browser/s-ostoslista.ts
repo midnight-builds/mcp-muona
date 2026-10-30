@@ -7,8 +7,16 @@
 // S-ostoslista OIDC flow without any human step. If the SSO session is gone we
 // stop and report — OTP/strong auth stays with the human (see CLAUDE.md).
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import * as z from "zod/v4";
 import { logger } from "../logger.ts";
 import {
@@ -46,6 +54,20 @@ export class GraphqlError extends Error {
 		super(`S-ostoslista GraphQL error: ${messages.join("; ")}`);
 		this.name = "GraphqlError";
 		this.errorTypes = errorTypes;
+	}
+}
+
+// Not a NotLoggedInError on purpose: a silent login cannot fix it, and
+// fetching a fresh anonymous token would orphan the lists for good.
+export class AnonymousIdentityLostError extends Error {
+	constructor(kept: string) {
+		super(
+			`The S-ostoslista token file was unreadable and was kept as ${kept}. Its anonymous token ` +
+				"owns Muona's shopping lists, so no new one is fetched automatically. Restore the " +
+				"anonymousToken from that file into the token file, or delete the kept file to start " +
+				"over with a new identity (Muona loses its lists; shared lists can be re-joined).",
+		);
+		this.name = "AnonymousIdentityLostError";
 	}
 }
 
@@ -140,20 +162,43 @@ function loadTokens(): StoredTokens {
 		cache = { anonymousToken: null, registered: null };
 		return cache;
 	}
+	// I/O errors (EACCES, EMFILE, …) propagate: the file may be fine, and
+	// treating it as corrupt would throw away the identity that owns the lists.
+	const text = readFileSync(path, "utf8");
 	let raw: unknown = null;
 	try {
-		raw = JSON.parse(readFileSync(path, "utf8"));
+		raw = JSON.parse(text);
 	} catch {
 		// Truncated or hand-edited file: treated like a schema mismatch below.
 	}
 	const parsed = StoredTokensSchema.safeParse(raw);
-	if (!parsed.success) {
-		logger.warn({ path }, "S-ostoslista token file unreadable, starting logged out");
-		cache = { anonymousToken: null, registered: null };
+	if (parsed.success) {
+		cache = parsed.data;
 		return cache;
 	}
-	cache = parsed.data;
+	// Keep the file for manual recovery rather than letting the next save
+	// overwrite it, but carry on with its anonymous token if that part is intact.
+	const aside = `${path}.corrupt-${Date.now()}`;
+	renameSync(path, aside);
+	const salvaged = SalvageSchema.safeParse(raw);
+	const anonymousToken = salvaged.success ? salvaged.data.anonymousToken : null;
+	logger.error(
+		{ path, aside, anonymousTokenKept: anonymousToken !== null },
+		"S-ostoslista token file unreadable, kept aside; starting logged out",
+	);
+	cache = { anonymousToken, registered: null };
+	if (anonymousToken) saveTokens(cache);
 	return cache;
+}
+
+const SalvageSchema = z.object({ anonymousToken: z.string().min(1) });
+
+function keptAsideTokenFile(): string | null {
+	const path = tokenPath();
+	const prefix = `${basename(path)}.corrupt-`;
+	if (!existsSync(dirname(path))) return null;
+	const kept = readdirSync(dirname(path)).find((f) => f.startsWith(prefix));
+	return kept ? join(dirname(path), kept) : null;
 }
 
 // Refresh tokens are equivalent to a live login, hence 0600 like the browser
@@ -183,10 +228,22 @@ const GraphqlEnvelopeSchema = z.object({
 
 export function extractGraphqlData<T>(json: unknown, schema: z.ZodType<T>): T {
 	const envelope = GraphqlEnvelopeSchema.parse(json);
-	if (envelope.errors && envelope.errors.length > 0) {
+	const errors = envelope.errors ?? [];
+	if (errors.length > 0) {
+		// AppSync returns field-level errors next to data that still parses
+		// (e.g. one product failing to resolve after a write). The write did
+		// happen; failing here would invite a duplicating retry.
+		const partial = envelope.data == null ? null : schema.safeParse(envelope.data);
+		if (partial?.success) {
+			logger.warn(
+				{ errors: errors.map((e) => e.message) },
+				"S-ostoslista returned data with field errors",
+			);
+			return partial.data;
+		}
 		throw new GraphqlError(
-			envelope.errors.map((e) => e.message),
-			envelope.errors.flatMap((e) => (e.errorType ? [e.errorType] : [])),
+			errors.map((e) => e.message),
+			errors.flatMap((e) => (e.errorType ? [e.errorType] : [])),
 		);
 	}
 	return schema.parse(envelope.data);
@@ -235,14 +292,28 @@ async function fetchAnonymousToken(): Promise<string> {
 	return token;
 }
 
-async function ensureAnonymousToken(force = false): Promise<string> {
+// Shopping lists belong to the anonymous token, not to the S-tunnus (verified
+// live 2026-10-30: a fresh anonymous token with the same registered login sees
+// none of them). So it is fetched once and never replaced — not on a 401, not
+// near its expiry (currently ~100 years out); a new one would orphan every list.
+async function ensureAnonymousToken(): Promise<string> {
 	const current = loadTokens().anonymousToken;
-	if (!force && current) {
+	if (current) {
 		const exp = decodeJwtExpiry(current);
-		// Opaque (non-JWT) tokens can't be checked locally; trust them until a 401.
-		if (exp === null || !needsRefresh(exp, Date.now())) return current;
-		logger.info({ expiresAt: expiryIso(exp) }, "S-ostoslista anonymous token expiring, renewing");
+		if (exp !== null && needsRefresh(exp, Date.now())) {
+			logger.error(
+				{ expiresAt: expiryIso(exp) },
+				"S-ostoslista anonymous token expiring; keeping it, since a new one would orphan the lists",
+			);
+		}
+		return current;
 	}
+	const kept = keptAsideTokenFile();
+	if (kept) {
+		logger.error({ kept }, "S-ostoslista anonymous token lost; refusing to fetch a new one");
+		throw new AnonymousIdentityLostError(kept);
+	}
+	logger.info("S-ostoslista has no anonymous token yet, fetching one");
 	if (!anonymousPromise) {
 		anonymousPromise = fetchAnonymousToken().finally(() => {
 			anonymousPromise = null;
@@ -359,8 +430,10 @@ async function ensureAccessToken(force = false): Promise<string> {
 function isUnauthorized(status: number, json: unknown): boolean {
 	if (status === 401 || status === 403) return true;
 	const parsed = GraphqlEnvelopeSchema.safeParse(json);
+	// With data present the operation ran; resending it would repeat a write.
 	return (
 		parsed.success &&
+		parsed.data.data == null &&
 		(parsed.data.errors ?? []).some((e) => e.errorType === "UnauthorizedException")
 	);
 }
@@ -400,14 +473,17 @@ async function gqlOnce<T>(
 	const started = Date.now();
 
 	const attempt = async (force: boolean) => {
-		const anon = await ensureAnonymousToken(force);
+		const anon = await ensureAnonymousToken();
 		const access = requireLogin ? await ensureAccessToken(force) : null;
 		return postGraphql(query, variables, { authorization: buildAuthorization(anon, access) });
 	};
 
 	let { status, json } = await attempt(false);
 	if (isUnauthorized(status, json)) {
-		logger.warn({ op, status }, "S-ostoslista call unauthorized, renewing tokens and retrying");
+		logger.warn(
+			{ op, status },
+			"S-ostoslista call unauthorized, refreshing the access token and retrying",
+		);
 		({ status, json } = await attempt(true));
 		if (requireLogin && isUnauthorized(status, json)) {
 			logger.warn({ op, status }, "S-ostoslista still unauthorized after token renewal");
@@ -729,7 +805,7 @@ const PricingSchema = z
 	})
 	.nullish();
 
-const ProductSchema = z.object({
+export const ProductSchema = z.object({
 	id: z.string().nullish(),
 	name: z.string().nullish(),
 	ean: z.string().nullish(),
@@ -763,7 +839,7 @@ const ShoppingListItemSchema = z.object({
 	product: ProductSchema.nullish(),
 });
 
-const ShoppingListSchema = z.object({
+export const ShoppingListSchema = z.object({
 	id: z.string(),
 	name: z.string(),
 	mode: z.string().nullish(),
@@ -771,33 +847,37 @@ const ShoppingListSchema = z.object({
 	shared: z.boolean(),
 	permissions: z.array(z.string()),
 	modifiedAt: z.string(),
-	store: z.object({ id: z.string(), name: z.string() }).nullish(),
+	store: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
 	items: z.array(ShoppingListItemSchema),
 });
 
 export const ShoppingListsDataSchema = z.object({ shoppingLists: z.array(ShoppingListSchema) });
 export type ShoppingList = z.infer<typeof ShoppingListSchema>;
 
-const PRODUCT_FIELDS = `
+export const PRODUCT_FIELDS = `
 	id name ean brandName available approxPrice priceUnit comparisonUnit
 	pricing { currentPrice regularPrice comparisonPrice campaignPrice campaignPriceValidUntil }
 	location { aisle label name }
 `;
 
+// Selection set matching ShoppingListSchema; every list-returning query and
+// mutation uses it so the result parses the same way.
+export const SHOPPING_LIST_FIELDS = `
+	id name mode storeId shared permissions modifiedAt
+	store { id name }
+	items {
+		__typename id name collected
+		... on ShoppingListItem { products { ean quantity } }
+		... on ProductResolvedShoppingListItem {
+			ean quantity quantityUnit sokId
+			product { ${PRODUCT_FIELDS} }
+		}
+	}
+`;
+
 const SHOPPING_LISTS_QUERY = `
 	query GetShoppingLists {
-		shoppingLists {
-			id name mode storeId shared permissions modifiedAt
-			store { id name }
-			items {
-				__typename id name collected
-				... on ShoppingListItem { products { ean quantity } }
-				... on ProductResolvedShoppingListItem {
-					ean quantity quantityUnit sokId
-					product { ${PRODUCT_FIELDS} }
-				}
-			}
-		}
+		shoppingLists { ${SHOPPING_LIST_FIELDS} }
 	}
 `;
 

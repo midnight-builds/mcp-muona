@@ -6,7 +6,49 @@ import {
 	getStatus,
 	type ShoppingList,
 } from "../browser/s-ostoslista.ts";
+import { type Product, shoppingListApi } from "../browser/s-ostoslista-lists.ts";
 import { ok, run } from "./tool-result.ts";
+
+const LOGIN_NOTE =
+	"Logs in automatically while the S-tunnus SSO session is alive; otherwise errors that the " +
+	"human must finish the S-Etukortti login (s_etukortti_login_*).";
+
+const ItemInputSchema = z
+	.object({
+		name: z
+			.string()
+			.min(1)
+			.optional()
+			.describe("Free-text item, e.g. 'maito'. With an ean, overrides the product name."),
+		ean: z
+			.string()
+			.regex(/^\d{8,14}$/)
+			.optional()
+			.describe("Add as a store product (price, aisle). Must exist in the list's store."),
+		quantity: z.number().positive().optional().describe("Product items only; default 1"),
+		quantityUnit: z
+			.string()
+			.min(1)
+			.optional()
+			.describe("Product items only; default the product's price unit, e.g. KPL or KG"),
+	})
+	.refine((i) => i.name !== undefined || i.ean !== undefined, "Each item needs a name or an ean");
+
+function summarizeProduct(p: Product) {
+	return {
+		id: p.id ?? null,
+		name: p.name ?? null,
+		ean: p.ean ?? null,
+		brand: p.brandName ?? null,
+		available: p.available ?? null,
+		price: p.pricing?.currentPrice ?? null,
+		regularPrice: p.pricing?.regularPrice ?? null,
+		comparisonPrice: p.pricing?.comparisonPrice ?? null,
+		comparisonUnit: p.comparisonUnit ?? null,
+		priceUnit: p.priceUnit ?? null,
+		aisle: p.location?.aisle ?? null,
+	};
+}
 
 // Flattens the two item variants (free-text vs product-resolved) so the agent
 // doesn't need to know the GraphQL union.
@@ -106,6 +148,193 @@ export function registerShoppingListTools(server: McpServer): void {
 						aisle: p.product.location?.aisle ?? null,
 					})),
 				});
+			}),
+	);
+
+	server.registerTool(
+		"get_shopping_list",
+		{
+			description: `One S-ostoslista shopping list by id, with its items. Read-only. ${LOGIN_NOTE}`,
+			inputSchema: z.object({ listId: z.string().min(1) }),
+		},
+		async ({ listId }) =>
+			run("Error fetching shopping list", async () => {
+				return ok(summarizeList(await shoppingListApi.fetchShoppingList(listId), true));
+			}),
+	);
+
+	server.registerTool(
+		"search_shopping_list_products",
+		{
+			description:
+				"Search products in one store's S-ostoslista assortment, to get the ean to add an item " +
+				"as a product (with price and aisle) rather than free text. Read-only. storeId is a SOK " +
+				`store id, e.g. a shopping list's store.id. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				storeId: z.string().min(1),
+				query: z.string().min(1),
+				limit: z.number().int().min(1).max(50).default(10),
+			}),
+		},
+		async ({ storeId, query, limit }) =>
+			run("Error searching products", async () => {
+				const { products, maybeHasMore } = await shoppingListApi.searchProducts(
+					storeId,
+					query,
+					limit,
+				);
+				return ok({ storeId, query, maybeHasMore, products: products.map(summarizeProduct) });
+			}),
+	);
+
+	server.registerTool(
+		"create_shopping_list",
+		{
+			description:
+				"Create a new S-ostoslista shopping list in a store, optionally with items. Items with " +
+				"an ean are looked up in that store first; if any ean is not found, nothing is created. " +
+				`Only edits the list in the app — never orders anything. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				name: z.string().min(1),
+				storeId: z.string().min(1).describe("SOK store id the list is for"),
+				items: z.array(ItemInputSchema).max(200).default([]),
+			}),
+		},
+		async ({ name, storeId, items }) =>
+			run("Error creating shopping list", async () => {
+				const list = await shoppingListApi.createShoppingList({
+					name,
+					storeId,
+					mode: "PLAN",
+					items,
+				});
+				return ok(summarizeList(list, true));
+			}),
+	);
+
+	server.registerTool(
+		"add_shopping_list_items",
+		{
+			description:
+				"Add items to an existing S-ostoslista shopping list. Free-text items need only a name; " +
+				"items with an ean are looked up in the list's store, and if any ean is not found nothing " +
+				`is added. Returns the updated list. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				listId: z.string().min(1),
+				items: z.array(ItemInputSchema).min(1).max(200),
+			}),
+		},
+		async ({ listId, items }) =>
+			run("Error adding shopping list items", async () => {
+				return ok(summarizeList(await shoppingListApi.addItems(listId, items), true));
+			}),
+	);
+
+	server.registerTool(
+		"update_shopping_list_items",
+		{
+			description:
+				"Update items on an S-ostoslista shopping list: mark collected/uncollected, rename, or " +
+				"change quantity. Item ids come from get_shopping_list; ids not on the list abort the " +
+				`whole update. Returns the updated list. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				listId: z.string().min(1),
+				updates: z
+					.array(
+						z.object({
+							itemId: z.string().min(1),
+							collected: z.boolean().optional(),
+							name: z.string().min(1).optional(),
+							quantity: z.number().positive().optional(),
+							quantityUnit: z.string().min(1).optional(),
+						}),
+					)
+					.min(1)
+					.max(200),
+			}),
+		},
+		async ({ listId, updates }) =>
+			run("Error updating shopping list items", async () => {
+				return ok(summarizeList(await shoppingListApi.updateItems(listId, updates), true));
+			}),
+	);
+
+	server.registerTool(
+		"remove_shopping_list_items",
+		{
+			description:
+				"Remove items from an S-ostoslista shopping list by item id (from get_shopping_list). " +
+				`Ids not on the list abort the whole removal. Returns the updated list. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				listId: z.string().min(1),
+				itemIds: z.array(z.string().min(1)).min(1).max(200),
+			}),
+		},
+		async ({ listId, itemIds }) =>
+			run("Error removing shopping list items", async () => {
+				return ok(summarizeList(await shoppingListApi.removeItems(listId, itemIds), true));
+			}),
+	);
+
+	server.registerTool(
+		"delete_shopping_list",
+		{
+			description:
+				"Permanently delete an S-ostoslista shopping list. For a list shared with others this " +
+				"may delete it for them too. Cannot be undone — only do this when the user asked for it. " +
+				LOGIN_NOTE,
+			inputSchema: z.object({ listId: z.string().min(1) }),
+		},
+		async ({ listId }) =>
+			run("Error deleting shopping list", async () => {
+				return ok({ deleted: await shoppingListApi.deleteShoppingList(listId) });
+			}),
+	);
+
+	server.registerTool(
+		"share_shopping_list",
+		{
+			description:
+				"Create a share link (https://s-ostoslista.fi/liity/…) for an S-ostoslista list. Lists " +
+				"belong to a device identity, not the S-tunnus, so this is how the user gets a list Muona " +
+				"made onto their phone: they open the link in the S-ostoslista app. Anyone with the link " +
+				`can join with the given permissions until it expires. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				listId: z.string().min(1),
+				permissions: z
+					.array(z.enum(["READ", "WRITE", "SHARE"]))
+					.min(1)
+					.default(["READ", "WRITE"])
+					.describe("READ to view, WRITE to edit, SHARE to re-share"),
+				validForHours: z.number().int().min(1).max(8760).default(24),
+			}),
+		},
+		async ({ listId, permissions, validForHours }) =>
+			run("Error sharing shopping list", async () => {
+				const url = await shoppingListApi.shareShoppingList(
+					listId,
+					[...new Set(permissions)],
+					validForHours,
+				);
+				return ok({ listId, url, permissions, validForHours });
+			}),
+	);
+
+	server.registerTool(
+		"claim_shared_shopping_list",
+		{
+			description:
+				"Join an S-ostoslista list someone shared (e.g. the user's own list from their phone: " +
+				"Jaa → link). Takes the share link, the whole share message, or the link id. Lists " +
+				"belong to a device identity, not the S-tunnus, so the user's phone lists are only " +
+				`visible to Muona after this. Returns the joined list. ${LOGIN_NOTE}`,
+			inputSchema: z.object({
+				link: z.string().min(1).describe("https://s-ostoslista.fi/liity/<id>, or the id"),
+			}),
+		},
+		async ({ link }) =>
+			run("Error joining shared shopping list", async () => {
+				return ok(summarizeList(await shoppingListApi.claimSharedShoppingList(link), true));
 			}),
 	);
 }
