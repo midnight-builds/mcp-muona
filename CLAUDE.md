@@ -52,8 +52,12 @@ restart, including a crash restart (`Restart=on-failure`), so:
 - Never edit, check out branches or run `git pull` in the production checkout — work in a
   separate worktree and merge via main.
 - Deploy only with `bun run deploy` (`scripts/deploy.sh`): it refuses unless the checkout
-  is clean, on main and equal to `origin/main`, runs the full gate, restarts the service
-  and waits for the health check.
+  is clean, on main and has no commits missing from `origin/main`; runs the full gate on
+  `origin/main` in a throwaway worktree; only then fast-forwards, restarts the service and
+  waits for the health check. A failed install resets to the previous commit; a failed
+  health check prints the rollback command.
+- A restart cuts off a login in progress (OTP, strong auth, remote screen) — check
+  `s_etukortti_session_status` before deploying.
 - Health check: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3011/mcp` → `401`
   (server up, auth enforced).
 

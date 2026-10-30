@@ -45,8 +45,15 @@ git worktree add --quiet --detach "$gate_dir" "$target"
 		bun run test:e2e
 ) || fail "gate red at ${target:0:7}; production checkout left untouched"
 
+previous=$(git rev-parse HEAD)
 git merge --quiet --ff-only "$target"
-bun install --frozen-lockfile
+# New src/ with old node_modules would go live on the next crash restart, so a
+# failed install puts the previous commit and its dependencies back.
+if ! bun install --frozen-lockfile; then
+	git reset --quiet --hard "$previous"
+	bun install --frozen-lockfile || true
+	fail "bun install failed at ${target:0:7}; production checkout reset to ${previous:0:7}"
+fi
 
 echo "deploy: gate green at ${target:0:7}, restarting $SERVICE"
 sudo systemctl restart "$SERVICE"
@@ -61,4 +68,5 @@ for _ in $(seq 1 30); do
 	fi
 	sleep 1
 done
-fail "$SERVICE did not answer 401 on $HEALTH_URL within 30s (last: ${code:-none})"
+fail "$SERVICE did not answer 401 on $HEALTH_URL within 30s (last: ${code:-none}).
+Roll back: cd $PROD_DIR && git reset --hard ${previous:0:7} && bun install --frozen-lockfile && sudo systemctl restart $SERVICE"
