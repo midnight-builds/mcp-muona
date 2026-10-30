@@ -28,20 +28,34 @@ describe("buildViewerUrl", () => {
 
 type FakeProc = { cmd: string[]; killed: boolean; exit: (code: number) => void };
 
+interface HarnessState {
+	phase: string;
+	now: number;
+	fronted: number;
+	holds: number;
+	passwordFiles: string[];
+	removedFiles: string[];
+	portsReady: boolean;
+	messages: string[];
+	messageClosed: number;
+	scheduled: (() => void)[];
+	failSpawn: string | null;
+}
+
 function harness(phase = "awaiting_strong_auth") {
 	const procs: FakeProc[] = [];
-	const state = {
+	const state: HarnessState = {
 		phase,
 		now: 1_000_000,
 		fronted: 0,
 		holds: 0,
-		passwordFiles: [] as string[],
-		removedFiles: [] as string[],
+		passwordFiles: [],
+		removedFiles: [],
 		portsReady: true,
-		messages: [] as string[],
+		messages: [],
 		messageClosed: 0,
-		scheduled: [] as (() => void)[],
-		failSpawn: null as string | null,
+		scheduled: [],
+		failSpawn: null,
 	};
 	let tick: (() => void) | null = null;
 	const deps: RemoteScreenDeps = {

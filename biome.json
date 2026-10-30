@@ -20,5 +20,18 @@
 				"organizeImports": "on"
 			}
 		}
-	}
+	},
+	"plugins": ["./biome-plugins/no-type-assertion.grit"],
+	"overrides": [
+		{
+			"includes": ["src/**"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "error"
+					}
+				}
+			}
+		}
+	]
 }

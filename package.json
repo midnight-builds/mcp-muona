@@ -8,14 +8,18 @@
 	},
 	"scripts": {
 		"dev": "bun run --watch src/index.ts",
-		"build": "bun build src/index.ts --outdir dist --target bun",
+		"build": "bun build src/index.ts --outdir dist --target bun --packages external",
 		"start": "bun run dist/index.js",
 		"login": "bun run scripts/s-etukortti-login.ts",
 		"sync": "bun run scripts/sync-receipts.ts",
 		"reparse": "bun run scripts/reparse-receipts.ts",
 		"test": "bun test",
+		"test:e2e": "bun test ./e2e/smoke.test.ts",
 		"check": "bunx biome check --write .",
-		"typecheck": "bunx tsc --noEmit"
+		"lint": "bunx biome ci .",
+		"typecheck": "bunx tsc --noEmit",
+		"prepare": "git config core.hooksPath .githooks || true",
+		"deploy": "scripts/deploy.sh"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.11",
