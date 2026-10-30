@@ -19,12 +19,16 @@ const ItemInputSchema = z
 			.string()
 			.min(1)
 			.optional()
-			.describe("Free-text item, e.g. 'maito'. With an ean, overrides the product name."),
+			.describe(
+				"Free-text item, e.g. 'maito'. For a product item: its name from search_shopping_list_products (required with ean).",
+			),
 		ean: z
 			.string()
 			.regex(/^\d{8,14}$/)
 			.optional()
-			.describe("Add as a store product (price, aisle). Must exist in the list's store."),
+			.describe(
+				"Add as a store product (price, aisle); give the product name too. Must be found in the list's store.",
+			),
 		quantity: z.number().positive().optional().describe("Product items only; default 1"),
 		quantityUnit: z
 			.string()
@@ -192,7 +196,7 @@ export function registerShoppingListTools(server: McpServer): void {
 		{
 			description:
 				"Create a new S-ostoslista shopping list in a store, optionally with items. Items with " +
-				"an ean are looked up in that store first; if any ean is not found, nothing is created. " +
+				"an ean (plus the product name, from search_shopping_list_products) are found in that store first; if any is not found, nothing is created. " +
 				`Only edits the list in the app — never orders anything. ${LOGIN_NOTE}`,
 			inputSchema: z.object({
 				name: z.string().min(1),
@@ -217,7 +221,7 @@ export function registerShoppingListTools(server: McpServer): void {
 		{
 			description:
 				"Add items to an existing S-ostoslista shopping list. Free-text items need only a name; " +
-				"items with an ean are looked up in the list's store, and if any ean is not found nothing " +
+				"items with an ean (plus the product name, from search_shopping_list_products) are found in the list's store; if any is not found nothing " +
 				`is added. Returns the updated list. ${LOGIN_NOTE}`,
 			inputSchema: z.object({
 				listId: z.string().min(1),

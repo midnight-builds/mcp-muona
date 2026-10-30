@@ -71,7 +71,7 @@ export function resolveItems(inputs: ItemInput[], products: Product[]): Resolved
 				ean: input.ean,
 				// The app's ProductResolvedShoppingListItem.sokId is the product's id.
 				sokId: product.id,
-				name: input.name ?? product.name ?? input.ean,
+				name: product.name ?? input.name ?? input.ean,
 				quantity: input.quantity ?? 1,
 				quantityUnit: input.quantityUnit ?? product.priceUnit ?? "KPL",
 				// Only matters for picked web orders, which this tool never places.
@@ -142,7 +142,6 @@ const DeleteItemsDataSchema = z.object({ batchDeleteShoppingListItem: ShoppingLi
 const DeleteListDataSchema = z.object({ deleteShoppingList: z.object({ id: z.string() }) });
 const ShareDataSchema = z.object({ generateShoppingListShareLink: z.object({ id: z.string() }) });
 const ClaimDataSchema = z.object({ claimSharedShoppingList: ShoppingListSchema });
-const ProductsDataSchema = z.object({ products: z.object({ items: z.array(ProductSchema) }) });
 const SearchDataSchema = z.object({
 	productSearch: z.object({ items: z.array(ProductSchema), maybeHasMore: z.boolean() }),
 });
@@ -231,11 +230,7 @@ const CLAIM_MUTATION = `
 	}
 `;
 
-const PRODUCTS_BY_EANS_QUERY = `
-	query ProductsByEans($eans: [String!], $storeId: ID, $pageSize: Int) {
-		products(eans: $eans, storeId: $storeId, pageSize: $pageSize) { items { ${PRODUCT_FIELDS} } }
-	}
-`;
+const EAN_SEARCH_PAGE_SIZE = 20;
 
 const SEARCH_QUERY = `
 	query ProductSearchInStore($storeId: ID, $query: String, $pageSize: Int) {
@@ -252,18 +247,28 @@ export function createShoppingListApi(call: GqlCall) {
 		return data.shoppingList;
 	}
 
+	// products/productByEan answer "Not Authorized" for this client (live
+	// 2026-10-30) while productSearch works, and a search by the exact product
+	// name returns it first. So each EAN item is matched in a store search for
+	// its name; the EAN check keeps a near-miss from being added.
 	async function resolveInStore(storeId: string, inputs: ItemInput[]) {
-		const eans = [...new Set(inputs.flatMap((i) => (i.ean ? [i.ean] : [])))];
-		const products =
-			eans.length === 0
-				? []
-				: (
-						await call(
-							PRODUCTS_BY_EANS_QUERY,
-							{ eans, storeId, pageSize: eans.length },
-							ProductsDataSchema,
-						)
-					).products.items;
+		const missingName = inputs.find((i) => i.ean && !i.name);
+		if (missingName) {
+			throw new Error(
+				`Item with ean ${missingName.ean} needs the product name too (from ` +
+					"search_shopping_list_products): the store is searched by name. Nothing was written.",
+			);
+		}
+		const searches = [...new Set(inputs.flatMap((i) => (i.ean && i.name ? [i.name] : [])))];
+		const products: Product[] = [];
+		for (const query of searches) {
+			const data = await call(
+				SEARCH_QUERY,
+				{ storeId, query, pageSize: EAN_SEARCH_PAGE_SIZE },
+				SearchDataSchema,
+			);
+			products.push(...data.productSearch.items);
+		}
 		const resolved = resolveItems(inputs, products);
 		if (resolved.unresolvedEans.length > 0) {
 			throw new Error(
