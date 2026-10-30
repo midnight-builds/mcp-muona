@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Helsinki"
+    groups:
+      dependencies:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+    cooldown:
+      default-days: 7
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Helsinki"
+    groups:
+      actions:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+    cooldown:
+      default-days: 7

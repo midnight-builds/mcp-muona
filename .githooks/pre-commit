@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Fast gates only; tests and build run in CI so this hook stays cheap enough
+# that nobody reaches for --no-verify.
+set -e
+bunx biome check --staged --no-errors-on-unmatched
+bun run typecheck

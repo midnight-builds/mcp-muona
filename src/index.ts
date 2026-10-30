@@ -351,5 +351,11 @@ function startHttpServer() {
 
 	logger.info({ port, url: `http://localhost:${port}/mcp` }, "Ruoka MCP server listening");
 
+	// The e2e smoke test only exercises HTTP and auth; warming up would open
+	// browsers against the live store sites and the S-Etukortti IdP.
+	if (process.env.MUONA_SKIP_WARMUP === "1") {
+		logger.info("Warmup skipped (MUONA_SKIP_WARMUP=1)");
+		return;
+	}
 	warmupAll();
 }

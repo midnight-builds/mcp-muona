@@ -1,0 +1,4 @@
+[test]
+# Unit tests live next to the code in src/; the e2e smoke test in e2e/ needs a
+# built bundle and runs separately via `bun run test:e2e`.
+root = "src"

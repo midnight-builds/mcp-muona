@@ -11,7 +11,13 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true
+			"recommended": true,
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"style": {
+				"noNonNullAssertion": "error"
+			}
 		}
 	},
 	"assist": {
@@ -20,5 +26,18 @@
 				"organizeImports": "on"
 			}
 		}
-	}
+	},
+	"plugins": ["./biome-plugins/no-type-assertion.grit"],
+	"overrides": [
+		{
+			"includes": ["src/**"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "error"
+					}
+				}
+			}
+		}
+	]
 }

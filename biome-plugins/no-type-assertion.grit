@@ -1,0 +1,9 @@
+language js
+
+or {
+	TsAsExpression(ty=$type),
+	TsTypeAssertionExpression(ty=$type)
+} as $cast where {
+	not $type <: r"const",
+	register_diagnostic(span=$cast, message="Type assertion: parse with Zod instead of asserting the shape (CLAUDE.md).")
+}
