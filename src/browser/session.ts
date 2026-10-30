@@ -1,11 +1,8 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { chromium } from "playwright-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { logger } from "../logger.ts";
-
-chromium.use(StealthPlugin());
+import { chromium } from "./chromium.ts";
 
 const BASE_URL = "https://www.k-ruoka.fi";
 

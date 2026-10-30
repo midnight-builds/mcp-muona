@@ -1,14 +1,14 @@
 {
-	"name": "ruoka",
+	"name": "muona",
 	"owner": {
-		"name": "p18a"
+		"name": "Midnight builds"
 	},
 	"plugins": [
 		{
-			"name": "ruoka",
+			"name": "muona",
 			"source": "./",
-			"description": "Search Finnish grocery and alcohol products across k-ruoka.fi, s-kaupat.fi, and alko.fi via MCP",
-			"version": "0.2.0"
+			"description": "S-Etukortti purchase receipts and purchase history, plus Finnish grocery and alcohol product search across k-ruoka.fi, s-kaupat.fi, and alko.fi via MCP",
+			"version": "0.3.0"
 		}
 	]
 }

@@ -1,15 +1,19 @@
 {
-	"name": "mcp-ruoka",
+	"name": "muona",
 	"module": "src/index.ts",
 	"type": "module",
 	"private": true,
 	"bin": {
-		"mcp-ruoka": "src/index.ts"
+		"muona": "src/index.ts"
 	},
 	"scripts": {
 		"dev": "bun run --watch src/index.ts",
 		"build": "bun build src/index.ts --outdir dist --target bun",
 		"start": "bun run dist/index.js",
+		"login": "bun run scripts/s-etukortti-login.ts",
+		"sync": "bun run scripts/sync-receipts.ts",
+		"reparse": "bun run scripts/reparse-receipts.ts",
+		"test": "bun test",
 		"check": "bunx biome check --write .",
 		"typecheck": "bunx tsc --noEmit"
 	},

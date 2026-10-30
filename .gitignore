@@ -12,36 +12,56 @@ coverage
 
 # logs
 logs
-_.log
+*.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
-# dotenv environment variable files
+# dotenv environment variable files (secrets: MCP_AUTH_TOKEN, OAuth, API keys)
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env.*
+!.env.example
 
 # caches
 .eslintcache
 .cache
 *.tsbuildinfo
 
-# IntelliJ based IDEs
+# editors and OS
 .idea
-
-# Finder (MacOS) folder config
+.vscode
 .DS_Store
 
-# fly.io (copy fly.example.toml)
-fly.toml
+# local agent state and session notes (never versioned)
+.claude/
+.paseo/
+handoffs/
 
-# browser persistent data
+# browser persistent data — the S-Etukortti profile is equivalent to live
+# login credentials (S-tunnus SSO cookies)
 .browser-data/
+.browser-data-*/
 
-# screenshots from exploration
+# screenshots from exploration (may show personal data, captcha images)
 screenshots/
 
 # playwright-cli artifacts
 .playwright-cli/
 snapshots/
+test-results/
+playwright-report/
+
+# HAR captures (may contain session data)
+har/
+*.har
+
+# temporary API capture dumps (real personal data)
+data-capture/
+
+# local purchase-history SQLite database and S-ostoslista tokens
+data/
+*.sqlite
+*.sqlite-*
+*.db
+
+# private keys and certificates
+*.pem
+*.key

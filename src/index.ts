@@ -14,11 +14,19 @@ import {
 	validateClientCredentials,
 	validateRefreshToken,
 } from "./auth.ts";
+import { startAutoSync } from "./auto-sync.ts";
 import { warmup as warmupAlko } from "./browser/alko.ts";
+import { sGroup } from "./browser/s-group/index.ts";
 import { warmup as warmupSKaupat } from "./browser/s-kaupat.ts";
 import { getPage } from "./browser/session.ts";
 import { logger } from "./logger.ts";
+import { registerAutoSyncTools } from "./tools/auto-sync.ts";
+import { registerCouponsTools } from "./tools/coupons.ts";
+import { registerHistoryTools } from "./tools/history.ts";
+import { registerLoginTools } from "./tools/login.ts";
+import { registerReceiptTools } from "./tools/receipts.ts";
 import { registerSearchTool } from "./tools/search.ts";
+import { registerShoppingListTools } from "./tools/shopping-list.ts";
 import { registerStoresTool } from "./tools/stores.ts";
 
 const logoPath = join(import.meta.dirname, "..", "logo.png");
@@ -26,20 +34,25 @@ const logoDataUri = `data:image/png;base64,${Buffer.from(await Bun.file(logoPath
 
 function createServer(): McpServer {
 	const server = new McpServer({
-		name: "mcp-ruoka",
-		version: "0.2.0",
+		name: "muona",
+		version: "0.3.0",
 		icons: [{ src: logoDataUri, mimeType: "image/png", sizes: ["512x512"] }],
 	});
 	registerSearchTool(server);
 	registerStoresTool(server);
+	registerReceiptTools(server);
+	registerLoginTools(server);
+	registerHistoryTools(server);
+	registerCouponsTools(server);
+	registerAutoSyncTools(server);
+	registerShoppingListTools(server);
 	return server;
 }
 
-if (process.argv.includes("--stdio")) {
-	logger.info("Starting in stdio mode");
-	const server = createServer();
-	const transport = new StdioServerTransport();
-	await server.connect(transport);
+// Pre-warm all sessions so the first request isn't slow. The S-Etukortti probe
+// also starts the keepalive timer right away when a stored login exists, instead
+// of only after the first receipt tool call.
+function warmupAll(): void {
 	getPage().catch((err) => {
 		logger.warn({ err }, "K-Ruoka pre-init failed (will retry on first request)");
 	});
@@ -49,6 +62,30 @@ if (process.argv.includes("--stdio")) {
 	warmupAlko().catch((err) => {
 		logger.warn({ err }, "Alko pre-init failed (will retry on first request)");
 	});
+	sGroup
+		.probe()
+		.then((status) => {
+			logger.info({ loggedIn: status.loggedIn }, "S-Etukortti session warmup");
+		})
+		.catch((err) => {
+			logger.warn({ err }, "S-Etukortti warmup failed (will retry on first request)");
+		});
+
+	// Idempotent and synchronous (just arms a 60s interval), so it's safe to
+	// call from both the stdio and HTTP startup paths without awaiting.
+	try {
+		startAutoSync();
+	} catch (err) {
+		logger.warn({ err }, "Auto-sync scheduler failed to start (will retry on next warmup)");
+	}
+}
+
+if (process.argv.includes("--stdio")) {
+	logger.info("Starting in stdio mode");
+	const server = createServer();
+	const transport = new StdioServerTransport();
+	await server.connect(transport);
+	warmupAll();
 } else {
 	startHttpServer();
 }
@@ -282,7 +319,9 @@ function startHttpServer() {
 	Bun.serve({
 		hostname: "0.0.0.0",
 		port,
-		idleTimeout: 120,
+		// Long-running login tool calls (strong-auth wait) can hold a request
+		// open for minutes; 255 is Bun's maximum.
+		idleTimeout: 255,
 		async fetch(req: Request): Promise<Response> {
 			const url = new URL(req.url);
 			logger.debug({ method: req.method, path: url.pathname }, "Incoming request");
@@ -312,14 +351,5 @@ function startHttpServer() {
 
 	logger.info({ port, url: `http://localhost:${port}/mcp` }, "Ruoka MCP server listening");
 
-	// Pre-warm so the first request isn't slow
-	getPage().catch((err) => {
-		logger.warn({ err }, "K-Ruoka pre-init failed (will retry on first request)");
-	});
-	warmupSKaupat().catch((err) => {
-		logger.warn({ err }, "S-Kaupat pre-init failed (will retry on first request)");
-	});
-	warmupAlko().catch((err) => {
-		logger.warn({ err }, "Alko pre-init failed (will retry on first request)");
-	});
+	warmupAll();
 }

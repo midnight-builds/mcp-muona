@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "k-ruokra-mcp",
+      "name": "muona",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
         "pino": "^10.3.1",

@@ -1,10 +1,10 @@
 {
-	"name": "ruoka",
-	"description": "Search Finnish grocery and alcohol products across K-Ruoka, S-Kaupat, and Alko via MCP",
-	"version": "0.2.0",
+	"name": "muona",
+	"description": "S-Etukortti purchase receipts and purchase history, plus Finnish grocery and alcohol product search across K-Ruoka, S-Kaupat, and Alko via MCP",
+	"version": "0.3.0",
 	"author": {
-		"name": "p18a"
+		"name": "Midnight builds"
 	},
-	"repository": "https://github.com/p18a/mcp-ruoka",
+	"repository": "https://github.com/midnight-builds/mcp-muona",
 	"license": "MIT"
 }

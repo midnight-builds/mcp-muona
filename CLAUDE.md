@@ -1,13 +1,23 @@
-# mcp-ruoka
+# CLAUDE.md
 
-MCP server for Finnish grocery and alcohol product search across K-Ruoka (k-ruoka.fi), S-Kaupat (s-kaupat.fi), and Alko (alko.fi). Single-client personal tool — keep auth, session management, and infrastructure simple rather than building for multi-tenant scale.
+## Project
+
+**Muona** — Midnight builds' MCP server, originally forked from
+[p18a/mcp-ruoka](https://github.com/p18a/mcp-ruoka) (much of the base code is
+upstream's; credit it in user-facing docs). It fetches purchase receipts from the S-ryhmä S-Etukortti service
+(s-etukortti.fi) for a logged-in user. Login uses an email one-time code (OTP)
+entered manually into a persistent Playwright browser profile; scheduled runs
+reuse that session. Single-client personal tool — keep auth, session management,
+and infrastructure simple rather than building for multi-tenant scale.
 
 ## Commands
 
 - `bun run dev` — run with watch mode
 - `bun run build` — bundle for production
+- `bun test` — run the test suite
 - `bun run check` — lint, format, and auto-fix with Biome
 - `bun run typecheck` — type-check without emitting
+- `bun run login` — interactive one-time S-Etukortti login (email OTP; human in the loop)
 
 ## Conventions
 
@@ -20,3 +30,9 @@ MCP server for Finnish grocery and alcohol product search across K-Ruoka (k-ruok
 - Comments should explain *why*, not *what* — no section dividers, no restating what the code does
 - Browser context is reused across calls — don't create new contexts per request
 - Keep chain-specific browser/API logic (`src/browser/`) isolated from MCP tool definitions (`src/tools/`)
+
+## Working rules
+
+- Do not publish, deploy, or create external services without explicit approval.
+- Never attempt to bypass or automate the OTP step; session expiry is reported
+  to the user, who re-authenticates manually.
