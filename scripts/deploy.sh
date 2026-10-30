@@ -33,14 +33,16 @@ cleanup() {
 trap cleanup EXIT
 
 git worktree add --quiet --detach "$gate_dir" "$target"
+# Chained with && on purpose: set -e is suspended inside a command that is
+# the left side of ||, so a plain list here would let a red step through.
 (
-	cd "$gate_dir"
-	bun install --frozen-lockfile
-	bun run lint
-	bun run typecheck
-	bun test
-	bun run build
-	bun run test:e2e
+	cd "$gate_dir" &&
+		bun install --frozen-lockfile &&
+		bun run lint &&
+		bun run typecheck &&
+		bun test &&
+		bun run build &&
+		bun run test:e2e
 ) || fail "gate red at ${target:0:7}; production checkout left untouched"
 
 git merge --quiet --ff-only "$target"
