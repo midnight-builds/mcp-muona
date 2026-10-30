@@ -84,7 +84,8 @@ export interface SGroupSession {
 	// gate and the exclusive IdP lease as the relogin; waits (bounded) for
 	// other silent flows, never for a human. Declines, a human step and IdP
 	// failures are outcomes; only a broken browser throws. A human step sets
-	// the relogin block and closes the page: the human logs in to S-Etukortti.
+	// the relogin block and hands the page to a human login (see login), whose
+	// callback later reaches target.exchangeCallback.
 	runSilentIdpFlow(
 		flow: SilentIdpFlowName,
 		target: CallbackFlowTarget,
@@ -123,6 +124,7 @@ export function createSGroupSession(ports: SGroupPorts, cfg: SGroupConfig): SGro
 		clock,
 		lease,
 		humanLoginActive: () => flow.humanLoginActive(),
+		handOver: (handover) => flow.handOverCallbackFlow(handover),
 	});
 
 	// I1: one token cell. Only refreshToken() writes a token into it; anyone

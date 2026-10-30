@@ -9,6 +9,7 @@ import { getContext, ORIGIN } from "./playwright.ts";
 import type {
 	CallbackFlowObservation,
 	CallbackFlowTarget,
+	HumanStepScreen,
 	IdpDriver,
 	IdpScreen,
 	StrongAuthProgress,
@@ -34,6 +35,10 @@ let loginPage: Page | null = null;
 // overtook while it awaited the browser never installs its page over the
 // newer one.
 let pageEpoch = 0;
+// Set while the login page belongs to a callback flow: the final callback hop
+// it has seen, if any. Read off requests, because the hop may redirect on to
+// the app's custom scheme and never show up as the page URL.
+let callbackLanding: { url: string | null } | null = null;
 
 function requirePage(): Page {
 	if (!loginPage || loginPage.isClosed()) throw new Error("The login page is no longer open");
@@ -42,6 +47,26 @@ function requirePage(): Page {
 
 function onApp(page: Page): boolean {
 	return new URL(page.url()).hostname === "s-etukortti.fi";
+}
+
+type Landing = { kind: "returned_to_app" } | { kind: "callback"; url: string };
+
+// Where the IdP let the login through to: a callback flow's own callback, or
+// s-etukortti.fi for the S-Etukortti login.
+function landed(page: Page): Landing | null {
+	if (callbackLanding) {
+		return callbackLanding.url ? { kind: "callback", url: callbackLanding.url } : null;
+	}
+	return onApp(page) ? { kind: "returned_to_app" } : null;
+}
+
+async function waitForLanding(page: Page, timeoutMs: number): Promise<Landing | null> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const landing = landed(page);
+		if (landing || page.isClosed() || Date.now() >= deadline) return landing;
+		await page.waitForTimeout(500).catch(() => {});
+	}
 }
 
 async function mainSnapshot(page: Page): Promise<string> {
@@ -85,7 +110,9 @@ async function findOtpInput(page: Page) {
 // s-etukortti.fi. This is a normal step of the login (bank/Mobiilivarmenne
 // strong authentication), not a rejected code, so it needs its own detection
 // ahead of the generic failure classification.
-async function detectStrongAuth(page: Page): Promise<IdpScreen | null> {
+async function detectStrongAuth(
+	page: Page,
+): Promise<Extract<IdpScreen, { kind: "strong_auth" }> | null> {
 	const heading = page.getByRole("heading", { name: STRONG_AUTH_HEADING_RE });
 	const headingVisible = await heading
 		.first()
@@ -115,7 +142,8 @@ async function detectStrongAuth(page: Page): Promise<IdpScreen | null> {
 // logins rely on, so it is checked first.
 async function classify(page: Page): Promise<IdpScreen> {
 	await page.waitForTimeout(4_000);
-	if (onApp(page)) return { kind: "returned_to_app" };
+	const landing = landed(page);
+	if (landing) return landing;
 
 	const emailBox = page.getByRole("textbox", { name: "Sähköpostiosoite" });
 	const emailVisible = await emailBox.isVisible({ timeout: 1_000 }).catch(() => false);
@@ -135,12 +163,10 @@ async function classify(page: Page): Promise<IdpScreen> {
 	const strongAuth = await detectStrongAuth(page);
 	if (strongAuth) return strongAuth;
 
-	// No known challenge on screen; the redirect back to s-etukortti.fi can
-	// take a few extra seconds, so give it one more chance before failing.
-	await page
-		.waitForURL((u) => u.hostname === "s-etukortti.fi", { timeout: 10_000 })
-		.catch(() => {});
-	if (onApp(page)) return { kind: "returned_to_app" };
+	// No known challenge on screen; the redirect back can take a few extra
+	// seconds, so give it one more chance before failing.
+	const late = await waitForLanding(page, 10_000);
+	if (late) return late;
 
 	const alertText = await page
 		.getByRole("alert")
@@ -154,29 +180,24 @@ async function classify(page: Page): Promise<IdpScreen> {
 	};
 }
 
-// Names the screen the callback flow stopped at. The core blocks automatic
-// flows only for a recognised step; unknown is reported as a failure.
-async function humanStepKind(
-	page: Page,
-): Promise<Extract<CallbackFlowObservation, { kind: "human_step" }>["step"]> {
+// Reads the screen the callback flow stopped at, in full: the page is handed
+// over to a human login, which shows the captcha image or the bank list.
+// null: no recognised step, which the flow reports as a failure.
+async function humanStepScreen(page: Page): Promise<HumanStepScreen | null> {
 	const frame = findCaptchaFrame(page);
-	if (
-		frame &&
-		(await frame
-			.locator(CAPTCHA_INPUT_SELECTOR)
-			.first()
-			.isVisible()
-			.catch(() => false))
-	) {
-		return "captcha";
+	const captchaInput = frame?.locator(CAPTCHA_INPUT_SELECTOR).first();
+	if (frame && captchaInput && (await captchaInput.isVisible().catch(() => false))) {
+		const buffer = await frame.locator("img").first().screenshot();
+		return { kind: "captcha", imageBase64: buffer.toString("base64") };
 	}
-	if (await detectStrongAuth(page)) return "strong_auth";
+	const strongAuth = await detectStrongAuth(page);
+	if (strongAuth) return strongAuth;
 	const emailVisible = await page
 		.getByRole("textbox", { name: "Sähköpostiosoite" })
 		.isVisible({ timeout: 1_000 })
 		.catch(() => false);
-	if (!emailVisible && (await findOtpInput(page))) return "otp";
-	return "unknown";
+	if (!emailVisible && (await findOtpInput(page))) return { kind: "otp" };
+	return null;
 }
 
 function where(page: Page): string {
@@ -212,8 +233,10 @@ async function runCallbackFlow(
 	const page = await openPage();
 	const startOrigin = new URL(target.startUrl).origin;
 	// Held in an object: TS can't see the event handler's assignment and would
-	// narrow a plain `let` to null for the rest of the function.
+	// narrow a plain `let` to null for the rest of the function. Shared with
+	// the steps, which finish this page if it is handed over to a human.
 	const captured: { url: string | null } = { url: null };
+	callbackLanding = captured;
 	page.on("request", (request) => {
 		const url = request.url();
 		if (!url.startsWith(`${startOrigin}/callback`)) return;
@@ -262,18 +285,21 @@ async function runCallbackFlow(
 
 		if (Date.now() - onIdpSince > IDP_SETTLE_MS) {
 			if (emailSubmitted) {
+				const screen = await humanStepScreen(page);
+				if (screen) return { kind: "human_step", screen, where: where(page) };
 				const emailAgain = await page
 					.getByRole("textbox", { name: "Sähköpostiosoite" })
 					.isVisible()
 					.catch(() => false);
-				if (emailAgain) {
-					return {
-						kind: "failed",
-						reason: "unexpected_idp_page",
-						detail: `The IdP asked for the email address again on ${where(page)}.`,
-					};
-				}
-				return { kind: "human_step", step: await humanStepKind(page), where: where(page) };
+				// Not a recognised human step, so no evidence the SSO is dead:
+				// blocking here would stop the hourly relogins over a page hiccup.
+				return {
+					kind: "failed",
+					reason: "unexpected_idp_page",
+					detail: emailAgain
+						? `The IdP asked for the email address again on ${where(page)}.`
+						: `Stuck on ${where(page)} without a recognised login step.`,
+				};
 			}
 			return {
 				kind: "failed",
@@ -298,6 +324,7 @@ async function closeLoginPage(): Promise<void> {
 	pageEpoch++;
 	const page = loginPage;
 	loginPage = null;
+	callbackLanding = null;
 	if (page) await page.close().catch(() => {});
 }
 
@@ -379,10 +406,8 @@ export const playwrightIdpDriver: IdpDriver = {
 			await otpInput.press("Enter");
 		}
 
-		await page
-			.waitForURL((u) => u.hostname === "s-etukortti.fi", { timeout: 60_000 })
-			.catch(() => {});
-		if (onApp(page)) return { kind: "returned_to_app" };
+		const landing = await waitForLanding(page, 60_000);
+		if (landing) return landing;
 
 		// The OTP was accepted but the site now wants strong authentication
 		// instead of returning straight to s-etukortti.fi: a normal next step.
@@ -454,17 +479,15 @@ export const playwrightIdpDriver: IdpDriver = {
 		return bodySnapshot(page);
 	},
 
-	// The flow redirects back to s-etukortti.fi once the human approves on
-	// their own device; until then this just reports what the page shows.
+	// The flow redirects back (to s-etukortti.fi, or a handed-over callback
+	// flow's callback) once the human approves on their own device; until then
+	// this just reports what the page shows.
 	async waitForReturn(timeoutMs): Promise<StrongAuthProgress> {
 		const page = requirePage();
-		try {
-			await page.waitForURL((u) => u.hostname === "s-etukortti.fi", { timeout: timeoutMs });
-			return { kind: "returned_to_app" };
-		} catch (err) {
-			logger.info({ err }, "Strong-authentication wait ended without a redirect back");
-			return { kind: "pending", pageInfo: await bodySnapshot(page) };
-		}
+		const landing = await waitForLanding(page, timeoutMs);
+		if (landing) return landing;
+		logger.info("Strong-authentication wait ended without a redirect back");
+		return { kind: "pending", pageInfo: await bodySnapshot(page) };
 	},
 
 	runCallbackFlow,

@@ -8,10 +8,13 @@
 import { logger } from "../../logger.ts";
 import type { LoginKind } from "../../store/login-history.ts";
 import { SessionExpiredError } from "./errors.ts";
-import type { IdpLease } from "./lease.ts";
+import type { IdpLease, LeaseHolder } from "./lease.ts";
 import {
+	type CallbackExchange,
+	type CallbackFlowTarget,
 	type Cancel,
 	type Clock,
+	type HumanStepScreen,
 	type IdpDriver,
 	type IdpScreen,
 	type LoginPhase,
@@ -60,6 +63,17 @@ export type LoginFlow = {
 	// Runs under the exclusive IdP lease. Ends logged_in, failed, or in the
 	// human step it was handed over at.
 	silentLogin(email: string): Promise<SilentLoginResult>;
+	// Takes over a callback flow's page that stopped at a human step, with the
+	// flow's exclusive lease grant, so the one-time code already mailed is not
+	// wasted. The human finishes it with the steps; the IdP then lands on the
+	// target's callback, which goes to target.exchangeCallback.
+	handOverCallbackFlow(handover: {
+		from: LeaseHolder;
+		release: () => void;
+		email: string;
+		screen: HumanStepScreen;
+		target: CallbackFlowTarget;
+	}): void;
 	humanLoginActive(): Promise<boolean>;
 };
 
@@ -97,6 +111,9 @@ type Attempt = LoginState & {
 	// The login went through the IdP (submitted the email). One that landed
 	// straight from a still-valid app session proves nothing about the SSO.
 	viaIdp?: boolean;
+	// Set on a page handed over from a callback flow: it lands on that
+	// service's callback instead of s-etukortti.fi.
+	callback?: CallbackFlowTarget;
 	touchedAt: number | null;
 };
 
@@ -106,8 +123,6 @@ const CLEARED = {
 	strongAuthMethods: undefined,
 	pageInfo: undefined,
 } as const;
-
-type HumanStepScreen = Extract<IdpScreen, { kind: "otp" | "captcha" | "strong_auth" }>;
 
 function isHumanStep(screen: IdpScreen): screen is HumanStepScreen {
 	return screen.kind === "otp" || screen.kind === "captcha" || screen.kind === "strong_auth";
@@ -309,7 +324,66 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 	// OTP/strong auth was needed; anything else rode the still-valid SSO session.
 	async function land(id: number): Promise<void> {
 		if (id !== state.id) return;
-		const kind: LoginKind = PHASES_NEEDING_HUMAN.includes(state.phase) ? "human" : "silent_sso";
+		const kind = landedKind();
+		await settleLanding(id, async () => {
+			const status = await deps.verifyLanded();
+			if (status.loggedIn) {
+				complete(id, kind, "login_steps");
+			} else {
+				logger.warn({ reason: status.reason }, "S-Etukortti login landed but did not verify");
+				update(id, { phase: "failed", ...CLEARED, error: status.reason });
+			}
+		});
+	}
+
+	// A handed-over callback flow finished at the IdP. The S-Etukortti app
+	// session is not touched (the next S-Etukortti call relogins silently on
+	// the revived SSO); the service that started the flow gets its callback.
+	async function landOnCallback(
+		id: number,
+		url: string,
+		target: CallbackFlowTarget,
+	): Promise<void> {
+		if (id !== state.id) return;
+		const kind = landedKind();
+		logger.info(
+			{ host: new URL(url).hostname },
+			"Handed-over login reached its callback; handing it to the service",
+		);
+		await settleLanding(id, async () => {
+			let result: CallbackExchange;
+			try {
+				result = await target.exchangeCallback(url);
+			} catch (err) {
+				result = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+			}
+			if (result.ok) {
+				complete(id, kind, "login_steps");
+				return;
+			}
+			// The callback may say cancelled or error, which proves nothing about
+			// the SSO, so the block stays. A new start is forced through the IdP
+			// and costs no code if the SSO did come back.
+			logger.warn(
+				{ detail: result.detail },
+				"Handed-over login's callback exchange failed; relogin block kept",
+			);
+			update(id, {
+				phase: "failed",
+				...CLEARED,
+				error:
+					`The login returned to its callback, but the token exchange failed: ${result.detail}. ` +
+					"Call s_etukortti_login_start again: if the S-tunnus session was revived it completes " +
+					"without a new one-time code.",
+			});
+		});
+	}
+
+	function landedKind(): LoginKind {
+		return PHASES_NEEDING_HUMAN.includes(state.phase) ? "human" : "silent_sso";
+	}
+
+	async function settleLanding(id: number, verify: () => Promise<void>): Promise<void> {
 		// The IdP is done with, so the page and lease go (verifying may need a
 		// page navigation), but the attempt stays active until verified: a
 		// cancel or start in between must not throw away a completed login.
@@ -318,13 +392,7 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 		const verified = (async () => {
 			try {
 				await closing;
-				const status = await deps.verifyLanded();
-				if (status.loggedIn) {
-					complete(id, kind, "login_steps");
-				} else {
-					logger.warn({ reason: status.reason }, "S-Etukortti login landed but did not verify");
-					update(id, { phase: "failed", ...CLEARED, error: status.reason });
-				}
+				await verify();
 			} catch (err) {
 				// start() and cancel() wait on this landing: they must get the
 				// failed state, not the raw error.
@@ -347,6 +415,13 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 		switch (screen.kind) {
 			case "returned_to_app":
 				await land(id);
+				return;
+			case "callback":
+				if (!state.callback) {
+					await terminate(id, "The login landed on another service's callback.");
+					return;
+				}
+				await landOnCallback(id, screen.url, state.callback);
 				return;
 			case "otp":
 			case "captcha":
@@ -454,8 +529,20 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 		} else {
 			let release: () => void;
 			try {
-				release = await lease.acquireExclusive("human_login");
+				// A silent flow we queue behind may hand its page over to a human
+				// login and with it the lease, which then stays taken until that
+				// login ends: waiting on would only time out.
+				release = await lease.acquireExclusive("human_login", {
+					abandon: () => state.id !== id,
+				});
 			} catch (err) {
+				if (state.id !== id) {
+					logger.info(
+						{ phase: state.phase },
+						"S-Etukortti login start joined the login handed over while it waited for the IdP lease",
+					);
+					return snapshot();
+				}
 				if (humanAttemptId === id) {
 					humanAttemptId = null;
 					update(id, { starting: undefined });
@@ -506,6 +593,25 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 		return snapshot();
 	}
 
+	// The one-time code (if any) is already in the user's inbox; keeping the
+	// page lets a human finish with it instead of mailing another. The lease
+	// changes hands without ever being free, so nothing drives the IdP between.
+	function handOver(
+		from: LeaseHolder,
+		release: () => void,
+		email: string,
+		screen: HumanStepScreen,
+		callback?: CallbackFlowTarget,
+	): void {
+		fresh({ email, viaIdp: true, callback });
+		humanAttemptId = state.id;
+		humanLease = { id: state.id, release };
+		enterHumanStep(state.id, screen);
+		// Last: transfer wakes the lease waiters, and a human start among them
+		// must already see the attempt it is joining.
+		lease.transfer(from, "human_login");
+	}
+
 	async function silentLogin(email: string): Promise<SilentLoginResult> {
 		const release = await lease.acquireExclusive("silent_relogin");
 		// A silent flow we queued behind (S-ostoslista) may have just stopped at
@@ -554,14 +660,8 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 			}
 
 			if (isHumanStep(screen)) {
-				// The one-time code (if any) is already in the user's inbox; keeping
-				// the page lets a human finish with it instead of mailing another.
-				lease.transfer("silent_relogin", "human_login");
 				ownsLease = false;
-				fresh({ email, viaIdp: true });
-				humanAttemptId = state.id;
-				humanLease = { id: state.id, release };
-				enterHumanStep(state.id, screen);
+				handOver("silent_relogin", release, email, screen);
 				logger.warn(
 					{ phase: state.phase, email },
 					"Relogin stopped at a human step; its login page is handed over to a human login",
@@ -572,7 +672,9 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 			const error =
 				screen.kind === "email_form"
 					? "The login page asked for the email address again."
-					: screen.snapshot;
+					: screen.kind === "callback"
+						? "The login landed on another service's callback."
+						: screen.snapshot;
 			return { phase: "failed", error };
 		} finally {
 			if (ownsLease) await releaseSilent();
@@ -627,8 +729,8 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 				async (id) => {
 					const seconds = clampStrongAuthWaitSeconds(timeoutSeconds);
 					const progress = await idp.waitForReturn(seconds * 1_000);
-					if (progress.kind === "returned_to_app") {
-						await land(id);
+					if (progress.kind !== "pending") {
+						await apply(id, progress);
 						return;
 					}
 					// Not approved yet: stay pending so the agent can just wait again.
@@ -689,6 +791,13 @@ export function createLoginFlow(deps: LoginFlowDeps): LoginFlow {
 	return {
 		steps,
 		silentLogin,
+		handOverCallbackFlow({ from, release, email, screen, target }) {
+			handOver(from, release, email, screen, target);
+			logger.warn(
+				{ from, phase: state.phase, email },
+				"Callback flow stopped at a human step; its login page is handed over to a human login",
+			);
+		},
 		async humanLoginActive() {
 			await reapIfStale();
 			return humanActive();

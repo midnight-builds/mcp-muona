@@ -633,6 +633,31 @@ describe("gql token handling", () => {
 			);
 		});
 
+		test("a handed-over login's late callback is exchanged and stored like a silent one", async () => {
+			let seen: Parameters<RunLoginFlow>[0] | null = null;
+			const outcome = await loginWith(async (target) => {
+				seen = target;
+				return { kind: "needs_human", detail: "page kept open" };
+			});
+			expect(outcome).toMatchObject({ ok: false, reason: "needs_human" });
+			if (!seen) throw new Error("no target");
+			const target: Parameters<RunLoginFlow>[0] = seen;
+
+			const accessToken = fakeJwt({ exp: future() });
+			mockFetch(
+				() => new Response(JSON.stringify({ accessToken, idToken: "id", refreshToken: "r2" })),
+			);
+			expect(await target.exchangeCallback(callback)).toEqual({ ok: true });
+			expect(calls[0]?.url).toBe("https://kirjautuminen.s-ostoslista.fi/verify");
+			const stored: unknown = JSON.parse(readFileSync(path, "utf8"));
+			expect(stored).toMatchObject({ registered: { refreshToken: "r2", accessToken } });
+
+			mockFetch(() => new Response(JSON.stringify({ error: "expired" }), { status: 400 }));
+			const failed = await target.exchangeCallback(callback);
+			expect(failed.ok).toBe(false);
+			if (!failed.ok) expect(failed.detail).toContain("/verify HTTP 400");
+		});
+
 		test("exchanges the callback nonce at /verify and stores the tokens", async () => {
 			const accessToken = fakeJwt({ exp: future() });
 			mockFetch(

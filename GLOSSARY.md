@@ -25,14 +25,20 @@ restore it with a silent login. Shared: every caller that hit the expiry waits
 for the same attempt.
 
 **Human step** — a captcha, one-time-code or strong-authentication screen. An
-automatic flow that reaches one stops there.
+automatic flow that reaches one stops there and hands its open page over to a
+human login, so the code it already mailed is the one the human types.
+
+**Handed-over login** — a human login that took over an automatic flow's page
+at a human step. One handed over from an S-ostoslista flow lands on the
+S-ostoslista callback, not on s-etukortti.fi: S-ostoslista gets its tokens, and
+the S-Etukortti app session is restored by the next relogin on the revived SSO.
 
 **Relogin block** — persisted flag set when an automatic flow reaches a
 recognised human step. While set, no automatic flow starts, so each SSO expiry
-costs at most one automatically triggered one-time-code email (a relogin hands
-that one to the human; an S-ostoslista flow cannot, so then the human's own
-login mails a second). While set, a human login is forced through the IdP.
-Cleared only by a completed login that went through the IdP.
+costs one one-time-code email, whichever service notices it first. While set, a
+human login is forced through the IdP. Cleared only by a completed login that
+went through the IdP (a handed-over one only once its callback was exchanged:
+a cancelled or error callback proves nothing about the SSO).
 
 **Cooldown** — the 20-minute wait after a *failed* relogin (network error,
 site hiccup) before another may start; the automatic S-ostoslista login waits

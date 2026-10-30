@@ -19,6 +19,7 @@ import {
 	harness,
 	ManualClock,
 	MINUTE,
+	ostoslistaTarget,
 	START,
 	ticks,
 	useTempSettingsDb,
@@ -29,10 +30,7 @@ import {
 
 const BodySchema = z.object({ value: z.string() });
 const isList = (url: string) => url.includes("limit=");
-const OSTOSLISTA = {
-	startUrl: "https://kirjautuminen.s-ostoslista.fi/login",
-	isCallback: (url: string) => url.includes("nonce="),
-};
+const OSTOSLISTA = ostoslistaTarget();
 
 useTempSettingsDb();
 
@@ -764,11 +762,6 @@ describe("login — waiting windows", () => {
 // While the block is set the SSO session is known dead, so a still-valid app
 // session must not let a "login" skip the IdP and clear the block.
 describe("login — relogin block forces the IdP", () => {
-	const OSTOSLISTA = {
-		startUrl: "https://kirjautuminen.s-ostoslista.fi/login",
-		isCallback: (url: string) => url.includes("nonce="),
-	};
-
 	test("a human start with the block set goes through the IdP even with an alive app session", async () => {
 		setSetting(RELOGIN_BLOCK_SETTING_KEY, "Automatic S-ostoslista login stopped at otp");
 		const { idp, session } = harness();
@@ -795,22 +788,25 @@ describe("login — relogin block forces the IdP", () => {
 		expect(ages.lastSilentLoginAt).toBeNull();
 	});
 
-	test("the S-ostoslista loop mails no code after a completed human login", async () => {
+	// Used to cost two codes: the flow closed its page and the human's own
+	// login mailed a second one.
+	test("an S-ostoslista expiry costs one code: the human finishes the flow's own page", async () => {
 		const { idp, session } = harness();
+		const target = ostoslistaTarget();
 		idp.humanLoginRevivesSso = true;
 		for (let round = 1; round <= 2; round++) {
 			// The SSO session dies; the app session is still valid.
 			idp.afterEmail = "otp";
 			const before = idp.otpEmails;
-			expect((await session.runSilentIdpFlow("ostoslista", OSTOSLISTA)).kind).toBe("needs_human");
-			// Accepted cost (R2): the human's login mails its own code.
+			expect((await session.runSilentIdpFlow("ostoslista", target)).kind).toBe("needs_human");
 			expect((await session.login.start(EMAIL)).phase).toBe("awaiting_otp");
 			expect((await session.login.submitOtp("123456")).phase).toBe("logged_in");
+			expect(target.exchanged).toHaveLength(round);
 			expect(session.report().autoRelogin.blockedReason).toBeNull();
-			expect((await session.runSilentIdpFlow("ostoslista", OSTOSLISTA)).kind).toBe("callback");
-			expect((await session.runSilentIdpFlow("ostoslista", OSTOSLISTA)).kind).toBe("callback");
-			expect(idp.otpEmails - before).toBe(2);
+			expect((await session.runSilentIdpFlow("ostoslista", target)).kind).toBe("callback");
+			expect(idp.otpEmails - before).toBe(1);
 		}
+		expect(idp.overlaps).toBe(0);
 		expect(getLoginAges(START).lastSilentLoginAt).toBeNull();
 	});
 });

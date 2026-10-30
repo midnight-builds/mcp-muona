@@ -9,6 +9,7 @@ import { closeSettingsDb, setSetting } from "../../store/settings.ts";
 import { SessionExpiredError, type SessionExpiredReason } from "./errors.ts";
 import type {
 	ApiObservation,
+	CallbackExchange,
 	CallbackFlowObservation,
 	CallbackFlowTarget,
 	Cancel,
@@ -259,6 +260,9 @@ export class FakeIdp implements IdpDriver {
 	// An alive SSO session can answer /login's authorize request itself and
 	// bounce straight back to the app before any email form is shown.
 	ssoBouncesWithoutEmailForm = false;
+	// The open page belongs to this callback flow: finishing a human step on it
+	// lands on the target's callback, not on the app.
+	pageTarget: CallbackFlowTarget | null = null;
 
 	constructor(private site: FakeSite) {}
 
@@ -266,6 +270,7 @@ export class FakeIdp implements IdpDriver {
 		if (this.pageOpen) this.overlaps++;
 		this.opens++;
 		this.pageOpen = true;
+		this.pageTarget = null;
 		if (opts?.forceIdp) {
 			this.forcedOpens++;
 			if (this.honoursForceIdp) this.site.expire();
@@ -310,12 +315,19 @@ export class FakeIdp implements IdpDriver {
 		if (this.pageOpen) this.overlaps++;
 		this.opens++;
 		this.pageOpen = true;
+		this.pageTarget = target;
 		this.callbackFlows.push(target.startUrl);
 		await tick();
 		this.emails.push(email);
 		if (this.hold) await this.hold;
 		const where = "tunnistus.s-ryhma.fi/login";
-		if (this.callbackFlowStuck) return { kind: "human_step", step: "unknown", where };
+		if (this.callbackFlowStuck) {
+			return {
+				kind: "failed",
+				reason: "unexpected_idp_page",
+				detail: `Stuck on ${where} without a recognised login step.`,
+			};
+		}
 		switch (this.afterEmail) {
 			case "sso_alive":
 				if (!target.isCallback(this.callbackUrl)) {
@@ -324,11 +336,15 @@ export class FakeIdp implements IdpDriver {
 				return { kind: "callback", url: this.callbackUrl };
 			case "otp":
 				this.otpEmails++;
-				return { kind: "human_step", step: "otp", where };
+				return { kind: "human_step", screen: { kind: "otp" }, where };
 			case "captcha":
-				return { kind: "human_step", step: "captcha", where };
+				return {
+					kind: "human_step",
+					screen: { kind: "captcha", imageBase64: "Y2FwdGNoYQ==" },
+					where,
+				};
 			case "strong_auth":
-				return { kind: "human_step", step: "strong_auth", where };
+				return { kind: "human_step", screen: this.strongAuth(), where };
 			case "unexpected":
 				return { kind: "failed", reason: "unexpected_idp_page", detail: `Stuck on ${where}` };
 			case "throw":
@@ -382,6 +398,7 @@ export class FakeIdp implements IdpDriver {
 	async close(): Promise<void> {
 		if (this.pageOpen) this.closes++;
 		this.pageOpen = false;
+		this.pageTarget = null;
 		if (this.closeHold) await this.closeHold;
 	}
 
@@ -391,12 +408,14 @@ export class FakeIdp implements IdpDriver {
 		return true;
 	}
 
-	private land(): { kind: "returned_to_app" } {
+	private land(): { kind: "returned_to_app" } | { kind: "callback"; url: string } {
+		// The IdP sends the human back to whichever service started the flow.
+		if (this.pageTarget) return { kind: "callback", url: this.callbackUrl };
 		if (this.landingRevivesSite) this.site.alive = true;
 		return { kind: "returned_to_app" };
 	}
 
-	private strongAuth(): IdpScreen {
+	private strongAuth(): Extract<IdpScreen, { kind: "strong_auth" }> {
 		return {
 			kind: "strong_auth",
 			methods: STRONG_AUTH_METHODS,
@@ -456,4 +475,22 @@ export function useTempSettingsDb(): void {
 		}
 		delete process.env.MUONA_DB_PATH;
 	});
+}
+
+// An S-ostoslista callback flow target that records what a handed-over
+// login's callback delivered.
+export function ostoslistaTarget(
+	result: CallbackExchange = { ok: true },
+): CallbackFlowTarget & { exchanged: string[] } {
+	const exchanged: string[] = [];
+	return {
+		startUrl: "https://kirjautuminen.s-ostoslista.fi/login",
+		isCallback: (url) => url.includes("/callback?") && url.includes("nonce="),
+		exchanged,
+		async exchangeCallback(url) {
+			exchanged.push(url);
+			await tick();
+			return result;
+		},
+	};
 }

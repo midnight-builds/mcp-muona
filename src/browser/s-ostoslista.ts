@@ -27,10 +27,11 @@ const REFRESH_SKEW_MS = 120_000;
 // Said whenever an automatic login is impossible, and only by NotLoggedInError,
 // so no message carries it twice. Never suggests cancelling a pending login:
 // its one-time code has already been emailed.
+// No `bun run login` either: stopping the server throws away a login page
+// handed over from S-ostoslista along with its emailed code.
 export const LOGIN_HINT =
-	"The human must finish the S-Etukortti login with the s_etukortti_login_* tools " +
-	"(or `bun run login` with the server stopped), which revives the S-tunnus SSO session; " +
-	"after that S-ostoslista calls log in by themselves.";
+	"The human must finish the S-Etukortti login with the s_etukortti_login_* tools, " +
+	"which revives the S-tunnus SSO session; after that S-ostoslista calls log in by themselves.";
 
 export class NotLoggedInError extends Error {
 	constructor(detail: string) {
@@ -443,6 +444,13 @@ export type RunLoginFlow = (target: CallbackFlowTarget) => Promise<SilentIdpFlow
 const LOGIN_TARGET: CallbackFlowTarget = {
 	startUrl: `${AUTH_ORIGIN}/login`,
 	isCallback: (url) => parseCallbackUrl(url) !== null,
+	// A flow that stopped at a human step lands here once the human finishes it
+	// through the s_etukortti_login_* tools.
+	async exchangeCallback(url) {
+		logger.info("S-ostoslista login: callback from a handed-over human login");
+		const outcome = await exchangeCallback(url);
+		return outcome.ok ? { ok: true } : { ok: false, detail: outcome.detail };
+	},
 };
 
 // The browser part (IdP, email submit, gate, IdP lease, relogin block) is the
@@ -483,9 +491,7 @@ export async function loginWith(runFlow: RunLoginFlow): Promise<LoginOutcome> {
 			return {
 				ok: false,
 				reason: "needs_human",
-				detail:
-					"The S-tunnus SSO session has expired: the IdP asked for a one-time code, captcha " +
-					"or strong authentication (an OTP email may have been sent). This is never automated.",
+				detail: `The S-tunnus SSO session has expired. ${outcome.detail}`,
 			};
 		case "failed":
 			return { ok: false, reason: outcome.reason, detail: outcome.detail };
