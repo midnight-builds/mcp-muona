@@ -33,9 +33,7 @@ runs the same list on every PR and push to main; `bun install` points git at
 4. `bun run build`
 5. `bun run test:e2e`
 
-tuotantokriittinen: kyllä — the server holds a logged-in S-tunnus browser profile and the
-user's full purchase history behind one bearer token; an auth regression leaks personal
-data, which a later deploy cannot undo. Major dependency updates go to human review.
+tuotantokriittinen: ei — single-user personal tool; a bad deploy is fixed by the next one.
 
 Before proposing a PR, offer the user an adversarial review: a subagent that tries to break
 the change and backs every finding with a concrete scenario and a `file:line` anchor.
