@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type * as z from "zod/v4";
+import { ShoppingListSchema } from "./s-ostoslista.ts";
 import {
 	buildItemUpdates,
 	createShoppingListApi,
+	findOnList,
 	type GqlCall,
 	parseShareLinkId,
 	resolveItems,
@@ -33,6 +35,8 @@ function list(items: unknown[] = []) {
 		items,
 	};
 }
+
+const parsedList = (items: unknown[] = []) => ShoppingListSchema.parse(list(items));
 
 const freeTextItem = { __typename: "ShoppingListItem", id: "i1", name: "maito", collected: false };
 
@@ -117,6 +121,55 @@ describe("resolveItems", () => {
 	test("rejects a quantity on a free-text item instead of dropping it", () => {
 		expect(() => resolveItems([{ name: "maito", quantity: 2 }], [])).toThrow(/maito/);
 		expect(() => resolveItems([{ name: "maito", quantityUnit: "KG" }], [])).toThrow(/maito/);
+	});
+});
+
+const productItem = {
+	__typename: "ProductResolvedShoppingListItem",
+	id: "i2",
+	name: milk.name,
+	collected: false,
+	ean: milk.ean,
+	quantity: 1,
+	quantityUnit: "KPL",
+	sokId: milk.id,
+	product: milk,
+};
+
+describe("findOnList", () => {
+	test("an EAN already on the list as an open product is not added again", () => {
+		const result = findOnList(parsedList([productItem]), [{ ean: milk.ean, name: milk.name }]);
+		expect(result.toAdd).toEqual([]);
+		expect(result.alreadyOnList).toEqual([
+			{ input: { ean: milk.ean, name: milk.name }, itemId: "i2", name: milk.name, quantity: 1 },
+		]);
+	});
+
+	test("a free-text name matches an open item regardless of case and spacing", () => {
+		const result = findOnList(parsedList([freeTextItem]), [{ name: " Maito " }]);
+		expect(result.toAdd).toEqual([]);
+		expect(result.alreadyOnList[0]?.itemId).toBe("i1");
+	});
+
+	test("collected items do not count, so buying again adds a new row", () => {
+		const result = findOnList(parsedList([{ ...productItem, collected: true }]), [
+			{ ean: milk.ean, name: milk.name },
+		]);
+		expect(result.toAdd).toEqual([{ ean: milk.ean, name: milk.name }]);
+		expect(result.alreadyOnList).toEqual([]);
+	});
+
+	test("a vaguer name is added but reported as similar to what is on the list", () => {
+		const result = findOnList(parsedList([productItem]), [{ name: "maito" }]);
+		expect(result.toAdd).toEqual([{ name: "maito" }]);
+		expect(result.similarOnList).toEqual([{ input: "maito", itemId: "i2", name: milk.name }]);
+	});
+
+	test("allowDuplicates adds everything and only reports similar items", () => {
+		const result = findOnList(parsedList([freeTextItem]), [{ name: "maito" }], true);
+		expect(result.toAdd).toEqual([{ name: "maito" }]);
+		expect(result.alreadyOnList).toEqual([]);
+		expect(result.similarOnList).toEqual([{ input: "maito", itemId: "i1", name: "maito" }]);
 	});
 });
 
@@ -279,6 +332,49 @@ describe("shopping list API", () => {
 			items: [{ name: "maito" }],
 			productResolvedItems: [expect.objectContaining({ ean: milk.ean, sokId: milk.id })],
 		});
+	});
+
+	test("addItems skips items already on the list and reports them", async () => {
+		const { call, calls } = fakeGql({
+			GetShoppingListById: { shoppingList: list([freeTextItem]) },
+			BatchInsertShoppingListItem: {
+				batchInsertShoppingListItem: list([
+					freeTextItem,
+					{ ...freeTextItem, id: "i3", name: "leipä" },
+				]),
+			},
+		});
+		const result = await createShoppingListApi(call).addItems("l1", [
+			{ name: "maito" },
+			{ name: "leipä" },
+		]);
+		expect(calls[1]?.variables.items).toEqual([{ name: "leipä" }]);
+		expect(result.added).toEqual(["leipä"]);
+		expect(result.alreadyOnList.map((d) => d.itemId)).toEqual(["i1"]);
+		expect(result.list.items).toHaveLength(2);
+	});
+
+	test("addItems writes nothing when every item is already on the list", async () => {
+		const { call, calls } = fakeGql({
+			GetShoppingListById: { shoppingList: list([productItem]) },
+		});
+		const result = await createShoppingListApi(call).addItems("l1", [
+			{ ean: milk.ean, name: milk.name },
+		]);
+		expect(calls.map((c) => c.op)).toEqual(["GetShoppingListById"]);
+		expect(result.added).toEqual([]);
+		expect(result.list.id).toBe("l1");
+	});
+
+	test("addItems with allowDuplicates adds a second row", async () => {
+		const { call, calls } = fakeGql({
+			GetShoppingListById: { shoppingList: list([freeTextItem]) },
+			BatchInsertShoppingListItem: { batchInsertShoppingListItem: list([freeTextItem]) },
+		});
+		await createShoppingListApi(call).addItems("l1", [{ name: "maito" }], {
+			allowDuplicates: true,
+		});
+		expect(calls[1]?.variables.items).toEqual([{ name: "maito" }]);
 	});
 
 	test("addItems with EANs on a list without a store fails before writing", async () => {

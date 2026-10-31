@@ -54,6 +54,13 @@ export type ItemUpdate = {
 
 export type ShoppingListMode = "PLAN" | "SCAN";
 
+export type AddItemsResult = {
+	list: ShoppingList;
+	added: string[];
+	alreadyOnList: AlreadyOnList[];
+	similarOnList: SimilarOnList[];
+};
+
 // The app only adds an EAN as a product once it has the store's product
 // record (sokId, name, unit). An EAN the store doesn't know is reported back
 // instead of silently becoming free text, so the agent can decide.
@@ -88,6 +95,63 @@ export function resolveItems(inputs: ItemInput[], products: Product[]): Resolved
 			result.items.push({ name: input.name });
 		} else {
 			throw new Error("Each item needs a name or an ean.");
+		}
+	}
+	return result;
+}
+
+export type AlreadyOnList = {
+	input: ItemInput;
+	itemId: string;
+	name: string;
+	quantity: number | null;
+};
+
+export type SimilarOnList = { input: string; itemId: string; name: string };
+
+export type OnListCheck = {
+	toAdd: ItemInput[];
+	alreadyOnList: AlreadyOnList[];
+	similarOnList: SimilarOnList[];
+};
+
+const normalizeName = (name: string) => name.trim().toLocaleLowerCase("fi");
+
+// The API happily inserts a second "maito" row, which is rarely what an agent
+// asked for. Only open (uncollected) items count: a collected one means it is
+// being bought again. Anything vaguer than the same EAN or the same name is
+// added and only hinted at, since "maito" next to "rasvaton maito 1l" may be
+// deliberate.
+export function findOnList(
+	list: ShoppingList,
+	inputs: ItemInput[],
+	allowDuplicates = false,
+): OnListCheck {
+	const open = list.items.filter((i) => !i.collected);
+	const result: OnListCheck = { toAdd: [], alreadyOnList: [], similarOnList: [] };
+	for (const input of inputs) {
+		const name = input.name === undefined ? undefined : normalizeName(input.name);
+		const same = open.find((item) =>
+			input.ean
+				? item.ean === input.ean || (item.products ?? []).some((p) => p.ean === input.ean)
+				: name !== undefined && normalizeName(item.name) === name,
+		);
+		if (same && !allowDuplicates) {
+			result.alreadyOnList.push({
+				input,
+				itemId: same.id,
+				name: same.name,
+				quantity: same.quantity ?? same.products?.[0]?.quantity ?? null,
+			});
+			continue;
+		}
+		result.toAdd.push(input);
+		if (input.name === undefined || name === undefined || name === "") continue;
+		for (const item of open) {
+			const other = normalizeName(item.name);
+			if (other.includes(name) || name.includes(other)) {
+				result.similarOnList.push({ input: input.name, itemId: item.id, name: item.name });
+			}
 		}
 	}
 	return result;
@@ -241,7 +305,7 @@ const SEARCH_QUERY = `
 	query ProductSearchInStore($storeId: ID, $query: String, $pageSize: Int) {
 		productSearch(storeId: $storeId, query: $query, pageSize: $pageSize) {
 			maybeHasMore
-			items { ${PRODUCT_FIELDS} }
+			items { ${PRODUCT_FIELDS} measurement { netWeight netWeightUnit } }
 		}
 	}
 `;
@@ -309,13 +373,29 @@ export function createShoppingListApi(call: GqlCall) {
 		return data.createShoppingList;
 	}
 
-	async function addItems(listId: string, inputs: ItemInput[]): Promise<ShoppingList> {
+	async function addItems(
+		listId: string,
+		inputs: ItemInput[],
+		options: { allowDuplicates?: boolean } = {},
+	): Promise<AddItemsResult> {
 		const list = await fetchShoppingList(listId);
+		const { toAdd, alreadyOnList, similarOnList } = findOnList(
+			list,
+			inputs,
+			options.allowDuplicates,
+		);
+		if (alreadyOnList.length > 0) {
+			logger.info(
+				{ listId, skipped: alreadyOnList.map((d) => d.itemId) },
+				"S-ostoslista items already on the list, not added again",
+			);
+		}
+		if (toAdd.length === 0) return { list, added: [], alreadyOnList, similarOnList };
 		let resolved: ResolvedItems;
-		if (!inputs.some((i) => i.ean)) {
-			resolved = resolveItems(inputs, []);
+		if (!toAdd.some((i) => i.ean)) {
+			resolved = resolveItems(toAdd, []);
 		} else if (list.storeId) {
-			resolved = await resolveInStore(list.storeId, inputs);
+			resolved = await resolveInStore(list.storeId, toAdd);
 		} else {
 			throw new Error(
 				`List ${listId} has no store, so EANs cannot be resolved; add items by name.`,
@@ -331,7 +411,12 @@ export function createShoppingListApi(call: GqlCall) {
 			{ listId, items: items.length, products: productResolvedItems.length },
 			"S-ostoslista items added",
 		);
-		return data.batchInsertShoppingListItem;
+		return {
+			list: data.batchInsertShoppingListItem,
+			added: [...productResolvedItems.map((p) => p.name), ...items.map((i) => i.name)],
+			alreadyOnList,
+			similarOnList,
+		};
 	}
 
 	async function updateItems(listId: string, updates: ItemUpdate[]): Promise<ShoppingList> {
