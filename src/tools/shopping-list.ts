@@ -6,7 +6,11 @@ import {
 	getStatus,
 	type ShoppingList,
 } from "../browser/s-ostoslista.ts";
-import { type Product, shoppingListApi } from "../browser/s-ostoslista-lists.ts";
+import {
+	APP_SHARE_PERMISSIONS,
+	type Product,
+	shoppingListApi,
+} from "../browser/s-ostoslista-lists.ts";
 import { ok, run } from "./tool-result.ts";
 
 const LOGIN_NOTE =
@@ -301,26 +305,22 @@ export function registerShoppingListTools(server: McpServer): void {
 			description:
 				"Create a share link (https://s-ostoslista.fi/liity/…) for an S-ostoslista list. Lists " +
 				"belong to a device identity, not the S-tunnus, so this is how the user gets a list Muona " +
-				"made onto their phone: they open the link in the S-ostoslista app. Anyone with the link " +
-				`can join with the given permissions until it expires. ${LOGIN_NOTE}`,
+				"made onto their phone: they open the link in the S-ostoslista app. Like the app's own " +
+				"share, anyone with the link can view, edit and re-share the list until the link " +
+				`expires. ${LOGIN_NOTE}`,
 			inputSchema: z.object({
 				listId: z.string().min(1),
-				permissions: z
-					.array(z.enum(["READ", "WRITE", "SHARE"]))
-					.min(1)
-					.default(["READ", "WRITE"])
-					.describe("READ to view, WRITE to edit, SHARE to re-share"),
 				validForHours: z.number().int().min(1).max(8760).default(24),
 			}),
 		},
-		async ({ listId, permissions, validForHours }) =>
+		async ({ listId, validForHours }) =>
 			run("Error sharing shopping list", async () => {
 				const url = await shoppingListApi.shareShoppingList(
 					listId,
-					[...new Set(permissions)],
+					[...APP_SHARE_PERMISSIONS],
 					validForHours,
 				);
-				return ok({ listId, url, permissions, validForHours });
+				return ok({ listId, url, permissions: APP_SHARE_PERMISSIONS, validForHours });
 			}),
 	);
 

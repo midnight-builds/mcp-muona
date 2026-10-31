@@ -126,6 +126,11 @@ export function parseShareLinkId(input: string): string | null {
 
 export type SharePermission = "READ" | "WRITE" | "SHARE";
 
+// What the app itself shares with. Narrower links (e.g. READ only) work, but the
+// app still shows edit and delete controls that then fail with a generic error
+// (tried live 2026-10-31), so the MCP tool does not offer them.
+export const APP_SHARE_PERMISSIONS: readonly SharePermission[] = ["READ", "WRITE", "SHARE"];
+
 function assertItemsOnList(list: ShoppingList, itemIds: string[]): void {
 	const known = new Set(list.items.map((i) => i.id));
 	const unknown = itemIds.filter((id) => !known.has(id));
@@ -370,8 +375,8 @@ export function createShoppingListApi(call: GqlCall) {
 
 	async function shareShoppingList(
 		listId: string,
-		permissions: SharePermission[],
-		validForHours: number,
+		permissions: SharePermission[] = [...APP_SHARE_PERMISSIONS],
+		validForHours = 24,
 	): Promise<string> {
 		const data = await call(
 			SHARE_MUTATION,
