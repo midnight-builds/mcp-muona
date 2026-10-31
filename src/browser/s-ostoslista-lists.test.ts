@@ -151,6 +151,30 @@ describe("findOnList", () => {
 		expect(result.alreadyOnList[0]?.itemId).toBe("i1");
 	});
 
+	test("names match across inner spacing and Unicode composition", () => {
+		const leipa = { ...freeTextItem, name: "ruis leipä" };
+		const result = findOnList(parsedList([leipa]), [{ name: "Ruis   leipä" }]);
+		expect(result.alreadyOnList[0]?.itemId).toBe("i1");
+	});
+
+	test("an EAN only matches a product row, not a free-text item's linked products", () => {
+		const linked = { ...freeTextItem, products: [{ ean: milk.ean, quantity: 1 }] };
+		const result = findOnList(parsedList([linked]), [{ ean: milk.ean, name: milk.name }]);
+		expect(result.toAdd).toEqual([{ ean: milk.ean, name: milk.name }]);
+	});
+
+	test("the same item twice in one call is refused", () => {
+		expect(() =>
+			findOnList(parsedList(), [
+				{ ean: milk.ean, name: milk.name },
+				{ ean: milk.ean, name: "x" },
+			]),
+		).toThrow(/more than once/);
+		expect(() => findOnList(parsedList(), [{ name: "maito" }, { name: "Maito" }])).toThrow(
+			/more than once/,
+		);
+	});
+
 	test("collected items do not count, so buying again adds a new row", () => {
 		const result = findOnList(parsedList([{ ...productItem, collected: true }]), [
 			{ ean: milk.ean, name: milk.name },
@@ -364,6 +388,16 @@ describe("shopping list API", () => {
 		expect(calls.map((c) => c.op)).toEqual(["GetShoppingListById"]);
 		expect(result.added).toEqual([]);
 		expect(result.list.id).toBe("l1");
+	});
+
+	test("addItems still refuses a quantity on free text that is already on the list", async () => {
+		const { call, calls } = fakeGql({
+			GetShoppingListById: { shoppingList: list([freeTextItem]) },
+		});
+		await expect(
+			createShoppingListApi(call).addItems("l1", [{ name: "maito", quantity: 2 }]),
+		).rejects.toThrow(/cannot carry a quantity/);
+		expect(calls.map((c) => c.op)).toEqual(["GetShoppingListById"]);
 	});
 
 	test("addItems with allowDuplicates adds a second row", async () => {

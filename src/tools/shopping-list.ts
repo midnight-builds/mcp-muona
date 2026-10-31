@@ -235,8 +235,8 @@ export function registerShoppingListTools(server: McpServer): void {
 			title: "S-ostoslista: create a list",
 			annotations: WRITE,
 			description:
-				"Create a new S-ostoslista shopping list in a store, optionally with items (same item " +
-				"rules as add_shopping_list_items). Product items are checked in that store first; if " +
+				"Create a new S-ostoslista shopping list in a store, optionally with items (product vs " +
+				"free-text items as in add_shopping_list_items). Product items are checked in that store first; if " +
 				"any is not found, nothing is created. The list belongs to Muona's device: use " +
 				"share_shopping_list to get it onto the user's phone. Only edits the list in the app — " +
 				`never orders anything. ${LOGIN_NOTE}`,
@@ -268,11 +268,11 @@ export function registerShoppingListTools(server: McpServer): void {
 				"(brand, size, variant), search it first with search_shopping_list_products and add " +
 				"it by ean + name: that gives price and aisle in the app. Use a free-text item (name " +
 				"only) only for generic things the user did not tie to a product, e.g. 'leipää'. " +
-				"Quantity works only on product items. Product items are checked in the list's store; " +
+				"Quantity works only on product items; the same item twice in one call is refused. Product items are checked in the list's store; " +
 				"if any is not found, nothing is added. An open (uncollected) item already on the " +
 				"list — same ean, or the same text for free text — is not added again but returned " +
-				"in alreadyOnList: raise its quantity with update_shopping_list_items if more is " +
-				"wanted, or set allowDuplicates for a second row. Collected items do not count. " +
+				"in alreadyOnList: raise its quantity (requestedQuantity) with " +
+				"update_shopping_list_items if more is wanted, or set allowDuplicates for a second row. Collected items do not count. " +
 				"Overlaps that are not exact (e.g. 'maito' when 'Kotimaista rasvaton maito 1 l' is " +
 				"on the list) are added and listed in similarOnList — tell the user. Returns " +
 				`added, alreadyOnList, similarOnList and the updated list. ${LOGIN_NOTE}`,
@@ -292,6 +292,7 @@ export function registerShoppingListTools(server: McpServer): void {
 					added: result.added,
 					alreadyOnList: result.alreadyOnList.map((d) => ({
 						requested: d.input.name ?? d.input.ean ?? null,
+						requestedQuantity: d.input.quantity ?? null,
 						itemId: d.itemId,
 						name: d.name,
 						quantity: d.quantity,

@@ -64,6 +64,15 @@ export type AddItemsResult = {
 // The app only adds an EAN as a product once it has the store's product
 // record (sokId, name, unit). An EAN the store doesn't know is reported back
 // instead of silently becoming free text, so the agent can decide.
+// Free-text items have no quantity field in the API; refusing beats silently
+// adding "maito" when the agent asked for two.
+function assertNoFreeTextQuantity(input: ItemInput): void {
+	if (input.ean || (input.quantity === undefined && input.quantityUnit === undefined)) return;
+	throw new Error(
+		`Free-text item "${input.name}" cannot carry a quantity; put it in the name or add it by ean.`,
+	);
+}
+
 export function resolveItems(inputs: ItemInput[], products: Product[]): ResolvedItems {
 	const byEan = new Map(products.map((p) => [p.ean, p]));
 	const result: ResolvedItems = { items: [], productResolvedItems: [], unresolvedEans: [] };
@@ -85,13 +94,7 @@ export function resolveItems(inputs: ItemInput[], products: Product[]): Resolved
 				isReplaceable: true,
 			});
 		} else if (input.name) {
-			// Free-text items have no quantity field in the API; refusing beats
-			// silently adding "maito" when the agent asked for two.
-			if (input.quantity !== undefined || input.quantityUnit !== undefined) {
-				throw new Error(
-					`Free-text item "${input.name}" cannot carry a quantity; put it in the name or add it by ean.`,
-				);
-			}
+			assertNoFreeTextQuantity(input);
 			result.items.push({ name: input.name });
 		} else {
 			throw new Error("Each item needs a name or an ean.");
@@ -115,7 +118,8 @@ export type OnListCheck = {
 	similarOnList: SimilarOnList[];
 };
 
-const normalizeName = (name: string) => name.trim().toLocaleLowerCase("fi");
+const normalizeName = (name: string) =>
+	name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("fi");
 
 // The API happily inserts a second "maito" row, which is rarely what an agent
 // asked for. Only open (uncollected) items count: a collected one means it is
@@ -129,19 +133,28 @@ export function findOnList(
 ): OnListCheck {
 	const open = list.items.filter((i) => !i.collected);
 	const result: OnListCheck = { toAdd: [], alreadyOnList: [], similarOnList: [] };
+	const seen = new Set<string>();
 	for (const input of inputs) {
+		assertNoFreeTextQuantity(input);
 		const name = input.name === undefined ? undefined : normalizeName(input.name);
+		const key = input.ean ? `ean:${input.ean}` : `name:${name}`;
+		if (seen.has(key)) {
+			throw new Error(
+				`"${input.name ?? input.ean}" is listed more than once. Nothing was written.`,
+			);
+		}
+		seen.add(key);
+		// Only a product row's own ean: what a free-text item's products[] link
+		// means is unverified, so it must not hide a product the agent asked for.
 		const same = open.find((item) =>
-			input.ean
-				? item.ean === input.ean || (item.products ?? []).some((p) => p.ean === input.ean)
-				: name !== undefined && normalizeName(item.name) === name,
+			input.ean ? item.ean === input.ean : normalizeName(item.name) === name,
 		);
 		if (same && !allowDuplicates) {
 			result.alreadyOnList.push({
 				input,
 				itemId: same.id,
 				name: same.name,
-				quantity: same.quantity ?? same.products?.[0]?.quantity ?? null,
+				quantity: same.quantity ?? null,
 			});
 			continue;
 		}
