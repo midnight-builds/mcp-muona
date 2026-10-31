@@ -822,6 +822,10 @@ export const ProductSchema = z.object({
 			name: z.string().nullish(),
 		})
 		.nullish(),
+	// Package size; only the product search selects it.
+	measurement: z
+		.object({ netWeight: z.number().nullish(), netWeightUnit: z.string().nullish() })
+		.nullish(),
 });
 
 const ShoppingListItemSchema = z.object({

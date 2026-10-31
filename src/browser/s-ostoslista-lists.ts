@@ -54,9 +54,25 @@ export type ItemUpdate = {
 
 export type ShoppingListMode = "PLAN" | "SCAN";
 
+export type AddItemsResult = {
+	list: ShoppingList;
+	added: string[];
+	alreadyOnList: AlreadyOnList[];
+	similarOnList: SimilarOnList[];
+};
+
 // The app only adds an EAN as a product once it has the store's product
 // record (sokId, name, unit). An EAN the store doesn't know is reported back
 // instead of silently becoming free text, so the agent can decide.
+// Free-text items have no quantity field in the API; refusing beats silently
+// adding "maito" when the agent asked for two.
+function assertNoFreeTextQuantity(input: ItemInput): void {
+	if (input.ean || (input.quantity === undefined && input.quantityUnit === undefined)) return;
+	throw new Error(
+		`Free-text item "${input.name}" cannot carry a quantity; put it in the name or add it by ean.`,
+	);
+}
+
 export function resolveItems(inputs: ItemInput[], products: Product[]): ResolvedItems {
 	const byEan = new Map(products.map((p) => [p.ean, p]));
 	const result: ResolvedItems = { items: [], productResolvedItems: [], unresolvedEans: [] };
@@ -78,16 +94,77 @@ export function resolveItems(inputs: ItemInput[], products: Product[]): Resolved
 				isReplaceable: true,
 			});
 		} else if (input.name) {
-			// Free-text items have no quantity field in the API; refusing beats
-			// silently adding "maito" when the agent asked for two.
-			if (input.quantity !== undefined || input.quantityUnit !== undefined) {
-				throw new Error(
-					`Free-text item "${input.name}" cannot carry a quantity; put it in the name or add it by ean.`,
-				);
-			}
+			assertNoFreeTextQuantity(input);
 			result.items.push({ name: input.name });
 		} else {
 			throw new Error("Each item needs a name or an ean.");
+		}
+	}
+	return result;
+}
+
+export type AlreadyOnList = {
+	input: ItemInput;
+	itemId: string;
+	name: string;
+	quantity: number | null;
+};
+
+export type SimilarOnList = { input: string; itemId: string; name: string };
+
+export type OnListCheck = {
+	toAdd: ItemInput[];
+	alreadyOnList: AlreadyOnList[];
+	similarOnList: SimilarOnList[];
+};
+
+const normalizeName = (name: string) =>
+	name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("fi");
+
+// The API happily inserts a second "maito" row, which is rarely what an agent
+// asked for. Only open (uncollected) items count: a collected one means it is
+// being bought again. Anything vaguer than the same EAN or the same name is
+// added and only hinted at, since "maito" next to "rasvaton maito 1l" may be
+// deliberate.
+export function findOnList(
+	list: ShoppingList,
+	inputs: ItemInput[],
+	allowDuplicates = false,
+): OnListCheck {
+	const open = list.items.filter((i) => !i.collected);
+	const result: OnListCheck = { toAdd: [], alreadyOnList: [], similarOnList: [] };
+	const seen = new Set<string>();
+	for (const input of inputs) {
+		assertNoFreeTextQuantity(input);
+		const name = input.name === undefined ? undefined : normalizeName(input.name);
+		const key = input.ean ? `ean:${input.ean}` : `name:${name}`;
+		if (seen.has(key)) {
+			throw new Error(
+				`"${input.name ?? input.ean}" is listed more than once. Nothing was written.`,
+			);
+		}
+		seen.add(key);
+		// Only a product row's own ean: what a free-text item's products[] link
+		// means is unverified, so it must not hide a product the agent asked for.
+		const same = open.find((item) =>
+			input.ean ? item.ean === input.ean : normalizeName(item.name) === name,
+		);
+		if (same && !allowDuplicates) {
+			result.alreadyOnList.push({
+				input,
+				itemId: same.id,
+				name: same.name,
+				quantity: same.quantity ?? null,
+			});
+			continue;
+		}
+		result.toAdd.push(input);
+		if (input.name === undefined || name === undefined || name === "") continue;
+		for (const item of open) {
+			const other = normalizeName(item.name);
+			if (other.includes(name) || name.includes(other)) {
+				result.similarOnList.push({ input: input.name, itemId: item.id, name: item.name });
+			}
 		}
 	}
 	return result;
@@ -241,7 +318,7 @@ const SEARCH_QUERY = `
 	query ProductSearchInStore($storeId: ID, $query: String, $pageSize: Int) {
 		productSearch(storeId: $storeId, query: $query, pageSize: $pageSize) {
 			maybeHasMore
-			items { ${PRODUCT_FIELDS} }
+			items { ${PRODUCT_FIELDS} measurement { netWeight netWeightUnit } }
 		}
 	}
 `;
@@ -309,13 +386,29 @@ export function createShoppingListApi(call: GqlCall) {
 		return data.createShoppingList;
 	}
 
-	async function addItems(listId: string, inputs: ItemInput[]): Promise<ShoppingList> {
+	async function addItems(
+		listId: string,
+		inputs: ItemInput[],
+		options: { allowDuplicates?: boolean } = {},
+	): Promise<AddItemsResult> {
 		const list = await fetchShoppingList(listId);
+		const { toAdd, alreadyOnList, similarOnList } = findOnList(
+			list,
+			inputs,
+			options.allowDuplicates,
+		);
+		if (alreadyOnList.length > 0) {
+			logger.info(
+				{ listId, skipped: alreadyOnList.map((d) => d.itemId) },
+				"S-ostoslista items already on the list, not added again",
+			);
+		}
+		if (toAdd.length === 0) return { list, added: [], alreadyOnList, similarOnList };
 		let resolved: ResolvedItems;
-		if (!inputs.some((i) => i.ean)) {
-			resolved = resolveItems(inputs, []);
+		if (!toAdd.some((i) => i.ean)) {
+			resolved = resolveItems(toAdd, []);
 		} else if (list.storeId) {
-			resolved = await resolveInStore(list.storeId, inputs);
+			resolved = await resolveInStore(list.storeId, toAdd);
 		} else {
 			throw new Error(
 				`List ${listId} has no store, so EANs cannot be resolved; add items by name.`,
@@ -331,7 +424,12 @@ export function createShoppingListApi(call: GqlCall) {
 			{ listId, items: items.length, products: productResolvedItems.length },
 			"S-ostoslista items added",
 		);
-		return data.batchInsertShoppingListItem;
+		return {
+			list: data.batchInsertShoppingListItem,
+			added: [...productResolvedItems.map((p) => p.name), ...items.map((i) => i.name)],
+			alreadyOnList,
+			similarOnList,
+		};
 	}
 
 	async function updateItems(listId: string, updates: ItemUpdate[]): Promise<ShoppingList> {
