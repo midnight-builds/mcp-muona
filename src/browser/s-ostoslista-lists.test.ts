@@ -354,6 +354,18 @@ describe("shopping list API", () => {
 		});
 	});
 
+	test("shareShoppingList defaults to the permissions the app itself shares with", async () => {
+		const { call, calls } = fakeGql({
+			GenerateShoppingListShareLink: { generateShoppingListShareLink: { id: "link-1" } },
+		});
+		await createShoppingListApi(call).shareShoppingList("l1");
+		expect(calls[0]?.variables).toEqual({
+			id: "l1",
+			permissions: ["READ", "WRITE", "SHARE"],
+			validForHours: 24,
+		});
+	});
+
 	test("claimSharedShoppingList accepts the join URL or the bare link id", async () => {
 		const { call, calls } = fakeGql({
 			ClaimSharedShoppingList: { claimSharedShoppingList: { ...list(), shared: true } },
