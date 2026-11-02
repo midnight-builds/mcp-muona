@@ -128,6 +128,7 @@ async function detectStrongAuth(
 		const name = (
 			await links
 				.nth(i)
+				// biome-ignore lint/performance/useDomNodeTextContent: Playwright Locator.innerText, not the DOM property; the rendered text is what the page shows, hidden nodes excluded
 				.innerText()
 				.catch(() => "")
 		).trim();
@@ -171,6 +172,7 @@ async function classify(page: Page): Promise<IdpScreen> {
 	const alertText = await page
 		.getByRole("alert")
 		.first()
+		// biome-ignore lint/performance/useDomNodeTextContent: Playwright Locator.innerText, not the DOM property; the rendered text is what the page shows, hidden nodes excluded
 		.innerText({ timeout: 1_000 })
 		.catch(() => "");
 	const snapshot = await mainSnapshot(page);
@@ -427,6 +429,7 @@ export const playwrightIdpDriver: IdpDriver = {
 		let target: ReturnType<typeof links.nth> | undefined;
 		for (let i = 0; i < count; i++) {
 			const candidate = links.nth(i);
+			// biome-ignore lint/performance/useDomNodeTextContent: Playwright Locator.innerText, not the DOM property; the rendered text is what the page shows, hidden nodes excluded
 			const name = (await candidate.innerText().catch(() => "")).trim();
 			if (name.toLowerCase() === method.toLowerCase()) {
 				target = candidate;
