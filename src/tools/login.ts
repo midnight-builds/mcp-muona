@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { remoteScreen } from "../browser/remote-screen.ts";
 import { type LoginState, sGroup } from "../browser/s-group/index.ts";
+import { DESTRUCTIVE, WRITE } from "./annotations.ts";
 import { ok, okContent, run, type ToolContentBlock } from "./tool-result.ts";
 
 // Turns raw login state into the instructions an agent needs to drive the
@@ -88,6 +89,9 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_start",
 		{
+			title: "S-Etukortti login: start (emails a code)",
+			// restart: true discards a login in progress, its emailed code included.
+			annotations: DESTRUCTIVE,
 			description:
 				"Start the S-ryhmä email one-time-code login for s-etukortti.fi. Ask the human user " +
 				"for their email address first — never guess it or read it from anywhere else. The " +
@@ -115,6 +119,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_captcha",
 		{
+			title: "S-Etukortti login: submit captcha",
+			annotations: WRITE,
 			description:
 				"Submit the text the human user read from the S-Etukortti login captcha image shown " +
 				"by s_etukortti_login_start. The result may show a new captcha image (wrong answer — " +
@@ -133,6 +139,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_otp",
 		{
+			title: "S-Etukortti login: submit email code",
+			annotations: WRITE,
 			description:
 				"Submit the one-time code the human user received by email during S-Etukortti login. " +
 				"On success the session is stored in the persistent browser profile and receipt tools " +
@@ -153,6 +161,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_strong_auth",
 		{
+			title: "S-Etukortti login: choose strong auth",
+			annotations: WRITE,
 			description:
 				"Choose a strong-authentication (pankkitunnukset) method after the S-Etukortti email " +
 				"one-time code. Ask the human user which method they want from the list shown in the " +
@@ -181,6 +191,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_strong_auth_phone",
 		{
+			title: "S-Etukortti login: Mobiilivarmenne phone number",
+			annotations: WRITE,
 			description:
 				"For the Mobiilivarmenne strong-authentication method: submit the human user's phone " +
 				"number so the provider can send an approval request to their phone. Ask the user for " +
@@ -201,6 +213,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_strong_auth_wait",
 		{
+			title: "S-Etukortti login: wait for approval",
+			annotations: { ...WRITE, idempotentHint: true },
 			description:
 				"Wait for the human user to approve the strong-authentication request on their own " +
 				"device (phone app or bank site). Call this after s_etukortti_login_strong_auth (and, " +
@@ -227,6 +241,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_remote_screen",
 		{
+			title: "S-Etukortti login: open remote screen",
+			annotations: { ...WRITE, idempotentHint: true },
 			description:
 				"Open a live, interactive view of the login browser for strong authentication by bank " +
 				"credentials (or any method the human wants to do by hand). Only works while the login " +
@@ -244,6 +260,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_remote_screen_close",
 		{
+			title: "S-Etukortti login: close remote screen",
+			annotations: { ...WRITE, idempotentHint: true },
 			description:
 				"Close the remote login screen early (it also closes by itself on login or timeout).",
 			inputSchema: z.object({}),
@@ -258,6 +276,8 @@ export function registerLoginTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_login_cancel",
 		{
+			title: "S-Etukortti login: cancel",
+			annotations: DESTRUCTIVE,
 			description:
 				"Cancel an in-progress S-Etukortti login attempt and close its browser page. Use this " +
 				"if the human user wants to stop or start over.",

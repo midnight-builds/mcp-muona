@@ -79,6 +79,7 @@ restart, including a crash restart (`Restart=on-failure`), so:
 - Strict TypeScript — no `any`, no non-null assertions, no `as` type casts (use Zod parsing instead); Biome enforces all three (`as` via `biome-plugins/no-type-assertion.grit`)
 - Parse all I/O boundaries with Zod — API responses, JSON.parse results, external data. Never trust runtime shapes via `as` assertions; validate with `.parse()` / `.safeParse()`. (`as const` is fine — it narrows literals, doesn't assert shapes)
 - All tool inputs validated with Zod schemas via MCP SDK
+- Every MCP tool has a `title` and `annotations` from `src/tools/annotations.ts` (READ, LOCAL_READ, WRITE, LOCAL_WRITE, DESTRUCTIVE), so clients can tell lookups from changes; `src/tools/annotations.test.ts` enforces it
 - Use pino for logging (`src/logger.ts`), never `console.log/warn/error` — logs must go to stderr to avoid interfering with stdio MCP transport (Biome `noConsole` enforces this in `src/`)
 - Comments should explain *why*, not *what* — no section dividers (`scripts/check-dividers.ts` in `bun run lint` enforces this), no restating what the code does
 - Browser context is reused across calls — don't create new contexts per request

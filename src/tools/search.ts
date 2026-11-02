@@ -4,11 +4,14 @@ import * as alko from "../browser/alko.ts";
 import * as kRuoka from "../browser/k-ruoka.ts";
 import * as sKaupat from "../browser/s-kaupat.ts";
 import { logger } from "../logger.ts";
+import { READ } from "./annotations.ts";
 
 export function registerSearchTool(server: McpServer): void {
 	server.registerTool(
 		"search_products",
 		{
+			title: "Web stores: search products",
+			annotations: READ,
 			description:
 				"Search for products. Supports K-Ruoka (k-ruoka.fi), S-Kaupat (s-kaupat.fi), and Alko (alko.fi). Requires chain from get_stores. storeId is required for K-Ruoka and S-Kaupat, optional for Alko (national catalog).",
 			inputSchema: z.object({

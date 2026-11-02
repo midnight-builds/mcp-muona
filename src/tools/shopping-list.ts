@@ -11,17 +11,15 @@ import {
 	type Product,
 	shoppingListApi,
 } from "../browser/s-ostoslista-lists.ts";
+import { DESTRUCTIVE, READ, WRITE } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
 const LOGIN_NOTE =
 	"Logs in automatically while the S-tunnus SSO session is alive; otherwise errors that the " +
 	"human must finish the S-Etukortti login (s_etukortti_login_*).";
 
-// Grouping hints for clients that list tools flat: every S-ostoslista tool's
-// title starts with the app name, and the hints say which ones change data.
-const READ = { readOnlyHint: true, openWorldHint: true } as const;
-const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
-const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: true } as const;
+// Every S-ostoslista tool's title starts with the app name, for clients that
+// list tools flat.
 
 const ItemInputSchema = z
 	.object({
