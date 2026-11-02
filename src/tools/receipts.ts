@@ -5,6 +5,7 @@ import * as sEtukortti from "../browser/s-etukortti.ts";
 import { sGroup } from "../browser/s-group/index.ts";
 import { parseReceiptText } from "../receipt-text.ts";
 import { getLoginAges } from "../store/login-history.ts";
+import { READ } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
 const DATE = z
@@ -46,6 +47,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_receipts",
 		{
+			title: "S-Etukortti: list receipts",
+			annotations: READ,
 			description:
 				"List S-Etukortti purchase receipts for the logged-in S-ryhmä member. " +
 				"Returns receipt IDs, store names, timestamps and totals. " +
@@ -77,6 +80,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_receipt",
 		{
+			title: "S-Etukortti: one receipt",
+			annotations: READ,
 			description:
 				"Fetch one S-Etukortti receipt by receiptId (from get_receipts). Returns the raw " +
 				"printed receipt text plus parsed line items (name, price, quantity, discounts).",
@@ -106,6 +111,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_bonus_summary",
 		{
+			title: "S-Etukortti: monthly bonus summary",
+			annotations: READ,
 			description:
 				"S-Etukortti bonus summary for one month: bonus percentage, benefit amounts, " +
 				"purchase totals, amount needed for the next bonus level, and the per-purchase list. " +
@@ -128,6 +135,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_bonus_status",
 		{
+			title: "S-Etukortti: current bonus status",
+			annotations: READ,
 			description:
 				"Quick check of the current month's S-Etukortti bonus status: bonus percentage, " +
 				"purchase totals, benefit amount so far, and how much more is needed for the next " +
@@ -152,6 +161,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_benefit_totals",
 		{
+			title: "S-Etukortti: benefit totals",
+			annotations: READ,
 			description:
 				"S-Etukortti benefit totals over a range of months: accumulated bonus, fuel " +
 				"discounts, surplus returns and total benefits. Months are YYYY-MM.",
@@ -170,6 +181,8 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"get_discounts",
 		{
+			title: "S-Etukortti: campaign discounts",
+			annotations: READ,
 			description:
 				"S-Etukortti campaign discounts (kampanjaedut) received in a date range, per month " +
 				"and per purchase.",
@@ -194,12 +207,15 @@ export function registerReceiptTools(server: McpServer): void {
 	server.registerTool(
 		"s_etukortti_session_status",
 		{
+			title: "S-Etukortti: session status",
+			annotations: READ,
 			description:
 				"Cheap health check for the S-Etukortti login session — call this periodically " +
 				"(e.g. once a day) to verify the session is still alive, not only when a receipt tool " +
 				"fails. Only start the login flow with the human user (s_etukortti_login_start) when " +
 				"this reports loggedIn: false; never try to log in or request one-time codes yourself " +
-				"outside that flow.",
+				"outside that flow. Like the receipt tools, this check renews an expired session by " +
+				"itself; if the S-tunnus SSO has expired too, that can email the user one code.",
 			inputSchema: z.object({}),
 		},
 		async () =>

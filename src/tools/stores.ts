@@ -5,11 +5,14 @@ import * as kRuoka from "../browser/k-ruoka.ts";
 import * as sKaupat from "../browser/s-kaupat.ts";
 import { logger } from "../logger.ts";
 import type { Chain, Store } from "../types.ts";
+import { READ } from "./annotations.ts";
 
 export function registerStoresTool(server: McpServer): void {
 	server.registerTool(
 		"get_stores",
 		{
+			title: "Web stores: list stores",
+			annotations: READ,
 			description:
 				"List stores from K-Ruoka (k-ruoka.fi), S-Kaupat (s-kaupat.fi), and Alko (alko.fi). Returns store IDs and chain values needed for search_products.",
 			inputSchema: z.object({
