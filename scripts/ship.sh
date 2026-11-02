@@ -19,6 +19,20 @@ fail() {
 branch=$(gh pr view "$pr" --json headRefName --jq .headRefName)
 [ "$branch" != "main" ] || fail "PR #$pr is from main"
 
+# Branch protection requires an up-to-date branch, so a PR behind main cannot
+# merge; bring main in and wait until GitHub reports the new head, otherwise the
+# CI loop below would judge the old head's checks.
+read -r merge_state old_head <<<"$(gh pr view "$pr" --json mergeStateStatus,headRefOid \
+	--jq '[.mergeStateStatus, .headRefOid] | @tsv')"
+if [ "$merge_state" = "BEHIND" ]; then
+	echo "ship: #$pr is behind main; updating its branch"
+	gh pr update-branch "$pr"
+	for _ in $(seq 1 30); do
+		[ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" != "$old_head" ] && break
+		sleep 2
+	done
+fi
+
 echo "ship: waiting for CI on #$pr ($branch)"
 # Allowlist, not a search for "fail": a cancelled run, an error from gh or a
 # check not yet registered must never read as green. head is the commit CI
@@ -42,8 +56,11 @@ worktree=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" \
 if [ -n "$worktree" ]; then
 	case "$PWD/" in "$worktree"/*) fail "run from outside $worktree; it is removed here" ;; esac
 	[ -z "$(git -C "$worktree" status --porcelain)" ] || fail "worktree $worktree has uncommitted changes"
-	[ "$(git -C "$worktree" rev-parse HEAD)" = "$head" ] ||
-		fail "worktree $worktree is not at the PR head ${head:0:7}; push or drop its commits first"
+	# After an update-branch the PR head has main merged on top of the worktree's
+	# commits; the worktree is safe to drop as long as all of them are in it.
+	git -C "$worktree" fetch --quiet origin "$branch"
+	git -C "$worktree" merge-base --is-ancestor HEAD "$head" ||
+		fail "worktree $worktree has commits not in the PR head ${head:0:7}; push or drop them first"
 	git worktree remove "$worktree"
 	echo "ship: removed worktree $worktree"
 fi
