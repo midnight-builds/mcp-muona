@@ -1,6 +1,6 @@
 // Shopping-list reads and writes on top of the S-ostoslista client. Mutation
 // shapes come from the schema shipped in the APK
-// (data-capture/s-ostoslista/schema.graphql); the Scan & Go and
+// (data-capture/s-ostoslista/schema.graphql); the Scan & Go, ESL and
 // recommendation-feedback operations are deliberately left out.
 
 import * as z from "zod/v4";
@@ -224,13 +224,6 @@ const DeleteItemsDataSchema = z.object({ batchDeleteShoppingListItem: ShoppingLi
 const DeleteListDataSchema = z.object({ deleteShoppingList: z.object({ id: z.string() }) });
 const ShareDataSchema = z.object({ generateShoppingListShareLink: z.object({ id: z.string() }) });
 const ClaimDataSchema = z.object({ claimSharedShoppingList: ShoppingListSchema });
-const EslIsEnabledDataSchema = z.object({
-	eslIsEnabled: z.object({ isEnabled: z.boolean() }),
-});
-const EslHasLabelDataSchema = z.object({ eslHasLabel: z.object({ hasLabel: z.boolean() }) });
-const EslBlinkDataSchema = z.object({
-	eslBlinkLabel: z.object({ success: z.boolean(), durationSeconds: z.number().int() }),
-});
 const SearchDataSchema = z.object({
 	productSearch: z.object({ items: z.array(ProductSchema), maybeHasMore: z.boolean() }),
 });
@@ -318,30 +311,6 @@ const CLAIM_MUTATION = `
 		claimSharedShoppingList(linkId: $linkId) { ${SHOPPING_LIST_FIELDS} }
 	}
 `;
-
-const ESL_IS_ENABLED_QUERY = `
-	query EslIsEnabled($storeId: String!) {
-		eslIsEnabled(storeId: $storeId) { isEnabled }
-	}
-`;
-
-const ESL_HAS_LABEL_QUERY = `
-	query EslHasLabel($ean: String!, $storeId: String!) {
-		eslHasLabel(ean: $ean, storeId: $storeId) { hasLabel }
-	}
-`;
-
-const ESL_BLINK_MUTATION = `
-	mutation EslBlinkLabel($ean: String!, $storeId: String!) {
-		eslBlinkLabel(ean: $ean, storeId: $storeId) { success durationSeconds }
-	}
-`;
-
-export type BlinkResult =
-	| { status: "blinking"; durationSeconds: number }
-	| { status: "store_has_no_electronic_labels" }
-	| { status: "product_has_no_label" }
-	| { status: "failed" };
 
 const EAN_SEARCH_PAGE_SIZE = 20;
 
@@ -530,26 +499,6 @@ export function createShoppingListApi(call: GqlCall) {
 		return data.claimSharedShoppingList;
 	}
 
-	// The app only offers the blink where the store and the product both have an
-	// electronic label; checking first keeps the answer specific instead of a
-	// bare success: false.
-	async function blinkShelfLabel(storeId: string, ean: string): Promise<BlinkResult> {
-		const enabled = await call(ESL_IS_ENABLED_QUERY, { storeId }, EslIsEnabledDataSchema);
-		if (!enabled.eslIsEnabled.isEnabled) {
-			logger.info({ storeId, ean }, "S-ostoslista store has no electronic shelf labels");
-			return { status: "store_has_no_electronic_labels" };
-		}
-		const label = await call(ESL_HAS_LABEL_QUERY, { storeId, ean }, EslHasLabelDataSchema);
-		if (!label.eslHasLabel.hasLabel) {
-			logger.info({ storeId, ean }, "S-ostoslista product has no electronic shelf label");
-			return { status: "product_has_no_label" };
-		}
-		const data = await call(ESL_BLINK_MUTATION, { storeId, ean }, EslBlinkDataSchema);
-		const { success, durationSeconds } = data.eslBlinkLabel;
-		logger.info({ storeId, ean, success, durationSeconds }, "S-ostoslista shelf label blink");
-		return success ? { status: "blinking", durationSeconds } : { status: "failed" };
-	}
-
 	return {
 		fetchShoppingList,
 		createShoppingList,
@@ -560,7 +509,6 @@ export function createShoppingListApi(call: GqlCall) {
 		searchProducts,
 		shareShoppingList,
 		claimSharedShoppingList,
-		blinkShelfLabel,
 	};
 }
 
