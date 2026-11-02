@@ -48,11 +48,14 @@ git worktree add --quiet --detach "$gate_dir" "$target"
 previous=$(git rev-parse HEAD)
 git merge --quiet --ff-only "$target"
 # New src/ with old node_modules would go live on the next crash restart, so a
-# failed install puts the previous commit and its dependencies back.
-if ! bun install --frozen-lockfile; then
+# failed install puts the previous commit and its dependencies back. Each
+# Playwright release pins its own browser build, and the gate never launches a
+# browser, so without this a Playwright bump deploys green and then every
+# browser launch fails. It is a no-op when the build is already in the cache.
+if ! { bun install --frozen-lockfile && bunx playwright install chromium chromium-headless-shell; }; then
 	git reset --quiet --hard "$previous"
 	bun install --frozen-lockfile || true
-	fail "bun install failed at ${target:0:7}; production checkout reset to ${previous:0:7}"
+	fail "install failed at ${target:0:7}; production checkout reset to ${previous:0:7}"
 fi
 
 echo "deploy: gate green at ${target:0:7}, restarting $SERVICE"
