@@ -2,14 +2,14 @@
 
 MCP server for **S-Etukortti purchase receipts** ([s-etukortti.fi](https://s-etukortti.fi)):
 fetches a logged-in S-ryhmä member's receipts, bonus and discount data, keeps a local
-SQLite purchase history, and reads S-ostoslista shopping lists. It also includes Finnish
+SQLite purchase history, and reads and edits S-ostoslista shopping lists. It also includes Finnish
 grocery and alcohol product search:
 
 - **S-Etukortti** — Playwright persistent profile with a manually established email-OTP
   login; API calls share the profile's HttpOnly session cookies and a CSRF token
   sniffed from the page's own traffic
 - **S-ostoslista** — the SOK shopping-list app's GraphQL API, signed in through the same
-  S-tunnus session
+  S-tunnus session; lists move between the phone and Muona via share links
 - **K-Ruoka** — Playwright browser with stealth plugin (Cloudflare Turnstile bypass)
 - **S-Kaupat** — Direct HTTP with persisted GraphQL query hashes (extracted via Playwright)
 - **Alko** — Direct HTTP with NextAuth guest session (no browser needed)
@@ -82,7 +82,9 @@ kept out of unencrypted backups (`chmod 700`).
 - **s_etukortti_login_start / _captcha / _otp / _cancel** — Step-by-step email-OTP login driven by the agent with the human answering the captcha and the emailed code.
 - **s_etukortti_login_strong_auth / _strong_auth_phone / _strong_auth_wait** — Strong-authentication step (Mobiilivarmenne recommended); approval happens on the user's own device.
 - **s_etukortti_login_remote_screen / _remote_screen_close** — Tailnet-only live view of the login browser for bank-credential strong auth; auto-closes.
-- **s_ostoslista_status / get_shopping_lists / get_past_products** — S-ostoslista (SOK shopping-list app) via its GraphQL API. Logs in by itself through the S-Etukortti S-tunnus session while it is alive (once per call, 20 min cooldown after a failed flow); otherwise the human finishes the S-Etukortti login (PoC, read-only).
+- **s_ostoslista_status / get_shopping_lists / get_shopping_list / get_past_products / search_shopping_list_products** — S-ostoslista (SOK shopping-list app) via its GraphQL API. Logs in by itself through the S-Etukortti S-tunnus session while it is alive (once per call, 20 min cooldown after a failed flow); otherwise the human finishes the S-Etukortti login.
+- **create_shopping_list / add_shopping_list_items / update_shopping_list_items / remove_shopping_list_items / delete_shopping_list** — edit S-ostoslista lists. Items are free text or store products by EAN plus product name (matched in a store search for the name, since the API's EAN lookup is not open to this client; an EAN not found aborts the write). To add a product, search it with search_shopping_list_products and pass the result's ean and name. An item already open on the list (same EAN or same text) is not added twice but reported back, as are near matches. Never places orders; Scan & Go, shelf-label blinking and recommendation feedback are left out on purpose.
+- **share_shopping_list / claim_shared_shopping_list** — move lists between the phone and Muona with share links (`https://s-ostoslista.fi/liity/<id>`); see [S-ostoslista lists and sharing](#s-ostoslista-lists-and-sharing).
 - **sync_receipts** — Downloads receipts into the local SQLite purchase-history database (`data/receipts.sqlite`, `MUONA_DB_PATH`).
 - **search_purchases** — Searches the local purchase history by item name, date range and store (no network).
 - **purchase_history_stats** — Local history coverage: receipt/item counts, date range, totals.
@@ -94,6 +96,26 @@ top up with `bun run sync --start YYYY-MM-DD --end YYYY-MM-DD` (defaults to the 
 months) or the `sync_receipts` MCP tool; syncs are idempotent and only fetch missing
 receipt details. The receipt-text parser is verified against every synced receipt
 (`parser_ok` column; grocery, fuel-pump and EV-charging formats supported).
+
+## S-ostoslista lists and sharing
+
+S-ostoslista lists belong to the app's **anonymous device identity**, not to the S-tunnus
+login: the phone app and Muona each have their own, so with the same login they still see
+different lists (verified live). Purchase-history data such as `get_past_products` follows
+the S-tunnus; lists do not.
+
+- **Phone → Muona:** in the app, share the list (Jaa) and give the link — or the whole
+  "Sinulle on jaettu S-ostoslista: …" message — to `claim_shared_shopping_list`. Muona then
+  sees and edits the same list as the phone.
+- **Muona → phone:** `share_shopping_list` returns a link; open it on the phone.
+
+Muona's device identity is the `anonymousToken` in `data/s-ostoslista-tokens.json`
+(`S_OSTOSLISTA_TOKEN_PATH`). It is fetched once and never replaced — a new one would orphan
+every list Muona owns or has joined — so back that file up with the rest of `data/`. An
+unreadable token file is moved aside as `….corrupt-<timestamp>` rather than overwritten; if
+its anonymous token could not be salvaged, the S-ostoslista tools refuse to fetch a new one
+until you copy the `anonymousToken` back into the token file or delete the kept file to
+start over with an empty identity.
 
 ## Running as a service
 
@@ -196,7 +218,7 @@ The server runs on `http://localhost:3001/mcp` by default (Streamable HTTP). Pas
 | `S_ETUKORTTI_REMOTE_SCREEN_URL` | Public (tailnet) base URL of the noVNC remote login screen |
 | `S_ETUKORTTI_REMOTE_SCREEN_MINUTES` | Remote screen time limit (default 15) |
 | `S_OSTOSLISTA_API_KEY` | AppSync API key shipped in the S-ostoslista app (in `.env`) |
-| `S_OSTOSLISTA_TOKEN_PATH` | S-ostoslista token file (default `data/s-ostoslista-tokens.json`) |
+| `S_OSTOSLISTA_TOKEN_PATH` | S-ostoslista token file (default `data/s-ostoslista-tokens.json`); holds the device identity that owns the lists — back it up |
 
 ## Usage examples
 

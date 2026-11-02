@@ -82,6 +82,9 @@ export type IdpScreen =
 	// open() only) tells an alive SSO answering /login's redirect apart from an
 	// app session that was still valid and never needed the IdP.
 	| { kind: "returned_to_app"; viaIdp?: boolean }
+	// Back on another service's callback: a callback flow that stopped at a
+	// human step was handed over, and the human finished it at the IdP.
+	| { kind: "callback"; url: string }
 	| { kind: "email_form" }
 	| { kind: "otp" }
 	| { kind: "captcha"; imageBase64: string }
@@ -90,8 +93,11 @@ export type IdpScreen =
 	// Snapshots are already redacted (see redact.ts).
 	| { kind: "unexpected"; snapshot: string };
 
+export type HumanStepScreen = Extract<IdpScreen, { kind: "otp" | "captcha" | "strong_auth" }>;
+
 export type StrongAuthProgress =
 	| { kind: "returned_to_app" }
+	| { kind: "callback"; url: string }
 	| { kind: "pending"; pageInfo: string };
 
 // Another S-group service's OIDC login through the same IdP (S-ostoslista).
@@ -100,14 +106,21 @@ export type StrongAuthProgress =
 export type CallbackFlowTarget = {
 	startUrl: string;
 	isCallback(url: string): boolean;
+	// A flow that stopped at a human step is handed over to the human login,
+	// so the one-time code already mailed is not wasted. When the human
+	// finishes, the callback is delivered here: the caller that started the
+	// flow got needs_human long ago.
+	exchangeCallback(url: string): Promise<CallbackExchange>;
 };
+
+export type CallbackExchange = { ok: true } | { ok: false; detail: string };
 
 export type CallbackFlowObservation =
 	| { kind: "callback"; url: string }
-	// The IdP wants a one-time code, captcha or strong auth. unknown: still on
-	// the IdP after the email with no recognised screen; the core treats it as
-	// a failure, not as a human step.
-	| { kind: "human_step"; step: "otp" | "captcha" | "strong_auth" | "unknown"; where: string }
+	// The IdP wants a one-time code, captcha or strong auth; the page stays on
+	// it until close(). Still on the IdP after the email with no recognised
+	// screen is a failed unexpected_idp_page, never a human step.
+	| { kind: "human_step"; screen: HumanStepScreen; where: string }
 	| { kind: "failed"; reason: "unexpected_idp_page" | "timeout"; detail: string };
 
 // Drives the one login page in the shared browser. Only one flow uses it at a
@@ -130,6 +143,8 @@ export interface IdpDriver {
 	// Opens a fresh page (replacing any earlier one, like open()) at
 	// target.startUrl, submits the email if the IdP asks for it and waits for
 	// the callback. Stops at the first human step; never types anything else.
+	// Until the page is replaced or closed, the steps above report reaching
+	// target's callback as { kind: "callback" } rather than returned_to_app.
 	runCallbackFlow(target: CallbackFlowTarget, email: string): Promise<CallbackFlowObservation>;
 	close(): Promise<void>;
 	bringToFront(): Promise<boolean>;

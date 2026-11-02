@@ -3,15 +3,15 @@
 // relogin, so they obey the same gate and take the IdP lease exclusively: a
 // flow that reaches a recognised human step sets the relogin block, and the
 // block declines every automatic flow until a human login through the IdP
-// completes. So each SSO expiry costs at most one automatically triggered
-// one-time-code email, plus the one the human's own login mails: a stopped
-// flow closes its page instead of handing it over (the human logs in to
-// S-Etukortti, not here), so when S-ostoslista notices the expiry first, two
-// codes go out in total.
+// completes. A stopped flow hands its open page over to a human login, like
+// the relogin does, so each SSO expiry costs one one-time-code email whichever
+// service notices it first: the human finishes the flow's own page, the IdP
+// lands on the service's callback, and the service exchanges it.
 import { logger } from "../../logger.ts";
 import { SessionExpiredError } from "./errors.ts";
 import { decideRelogin, type ReloginDecision } from "./gate.ts";
 import type { IdpLease, LeaseHolder } from "./lease.ts";
+import type { LoginFlow } from "./login.ts";
 import type {
 	CallbackFlowObservation,
 	CallbackFlowTarget,
@@ -30,6 +30,8 @@ export type SilentIdpFlowOutcome =
 	// a human's request, and both holds belong to the S-Etukortti relogin's
 	// own attempts.
 	| { kind: "declined"; reason: Decline["reason"]; detail: string }
+	// The page was handed over to a human login; its callback will reach
+	// target.exchangeCallback if the human finishes it.
 	| { kind: "needs_human"; detail: string }
 	| Extract<CallbackFlowObservation, { kind: "failed" }>;
 
@@ -39,6 +41,7 @@ export type SilentIdpFlowDeps = {
 	clock: Clock;
 	lease: IdpLease;
 	humanLoginActive(): Promise<boolean>;
+	handOver: LoginFlow["handOverCallbackFlow"];
 };
 
 const SERVICE_NAMES: Record<SilentIdpFlowName, string> = { ostoslista: "S-ostoslista" };
@@ -78,28 +81,37 @@ export function createSilentIdpFlows(
 		step: Extract<CallbackFlowObservation, { kind: "human_step" }>,
 	): SilentIdpFlowOutcome {
 		const service = SERVICE_NAMES[flow];
-		const reason =
-			`Automatic ${service} login stopped at a human step (${step.step} on ${step.where}): ` +
-			"OTP, captcha and strong authentication are never automated. A human must finish the " +
-			"S-Etukortti login via the s_etukortti_login_* tools (or `bun run login` with the " +
-			`server stopped); that revives the S-tunnus SSO session, after which the ${service} ` +
-			"login completes silently.";
-		store.setReloginBlock(reason);
+		const where = `${step.screen.kind} on ${step.where}`;
+		// Outlives the handed-over page (cancel, 10 idle minutes), so it names no page.
+		store.setReloginBlock(
+			`Automatic ${service} login stopped at a human step (${where}): OTP, captcha and ` +
+				"strong authentication are never automated. A human must finish an S-Etukortti login " +
+				"via the s_etukortti_login_* tools (or `bun run login` with the server stopped); that " +
+				`revives the S-tunnus SSO session, after which the ${service} login completes silently.`,
+		);
 		const ages = store.loginAges();
 		// Same lifetime fields as the relogin handover: the SSO died somewhere
 		// after the last S-Etukortti login that touched the IdP.
 		logger.warn(
 			{
 				flow,
-				step: step.step,
+				step: step.screen.kind,
 				where: step.where,
 				ssoExpired: true,
 				hoursSinceHumanLogin: ages?.hoursSinceHumanLogin ?? null,
 				hoursSinceSilentLogin: ages?.hoursSinceSilentLogin ?? null,
 			},
-			"Silent IdP flow needs a human step: page closed, relogin blocked until a login completes",
+			"Silent IdP flow needs a human step: page handed over, relogin blocked until a login completes",
 		);
-		return { kind: "needs_human", detail: reason };
+		return {
+			kind: "needs_human",
+			detail:
+				`Automatic ${service} login stopped at a human step (${where}); OTP, captcha and strong ` +
+				"authentication are never automated. Its login page is kept open for a human: call " +
+				"s_etukortti_login_start (it returns the pending step) and finish with the other " +
+				"s_etukortti_login_* tools. Do not cancel it; any one-time code has already been " +
+				`emailed. Finishing it logs ${service} in as well.`,
+		};
 	}
 
 	return async function runSilentIdpFlow(flow, target) {
@@ -121,6 +133,7 @@ export function createSilentIdpFlows(
 			throw err;
 		}
 
+		let handedOver = false;
 		try {
 			// The flow we queued behind may have just stopped at a human step and
 			// set the block; driving the IdP now would mail a second code.
@@ -145,21 +158,18 @@ export function createSilentIdpFlows(
 					);
 					return observation;
 				}
-				case "human_step":
-					if (observation.step === "unknown") {
-						// Not a recognised human step, so no evidence the SSO is dead:
-						// blocking here would stop the hourly relogins over a page hiccup.
-						logger.warn(
-							{ flow, where: observation.where },
-							"Silent IdP flow stuck on an unrecognised IdP screen",
-						);
-						return {
-							kind: "failed",
-							reason: "unexpected_idp_page",
-							detail: `Stuck on ${observation.where} without a recognised login step.`,
-						};
-					}
-					return stopAtHumanStep(flow, observation);
+				case "human_step": {
+					const outcome = stopAtHumanStep(flow, observation);
+					deps.handOver({
+						from: flow,
+						release,
+						email: decision.email,
+						screen: observation.screen,
+						target,
+					});
+					handedOver = true;
+					return outcome;
+				}
 				case "failed":
 					logger.warn(
 						{ flow, reason: observation.reason, detail: observation.detail },
@@ -171,11 +181,11 @@ export function createSilentIdpFlows(
 			logger.warn({ err, flow }, "Silent IdP flow threw");
 			throw err;
 		} finally {
-			// Never handed to a human login: the human logs in to S-Etukortti,
-			// which revives the SSO session this flow needs.
-			const closing = idp.close();
-			release();
-			await closing;
+			if (!handedOver) {
+				const closing = idp.close();
+				release();
+				await closing;
+			}
 		}
 	};
 }

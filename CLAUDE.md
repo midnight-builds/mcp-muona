@@ -36,7 +36,11 @@ runs the same list on every PR and push to main; `bun install` points git at
 tuotantokriittinen: ei — single-user personal tool; a bad deploy is fixed by the next one.
 
 Before proposing a PR, offer the user an adversarial review: a subagent that tries to break
-the change and backs every finding with a concrete scenario and a `file:line` anchor.
+the change against `CODING_STANDARDS.md` and backs every finding with a concrete scenario
+and a `file:line` anchor.
+
+Before building on an S-ostoslista operation not yet used in `src/`, run it live with
+`scripts/sostoslista-probe.ts`: the APK schema lists operations Muona's tokens may not call.
 
 ## Deploy
 
@@ -49,6 +53,8 @@ restart, including a crash restart (`Restart=on-failure`), so:
 
 - Never edit, check out branches or run `git pull` in the production checkout — work in a
   separate worktree and merge via main.
+- Merge with `scripts/ship.sh <pr>` (run outside the PR's worktree): waits for CI, removes
+  the worktree, squash-merges and deletes the branch.
 - Deploy only with `bun run deploy` (`scripts/deploy.sh`): it refuses unless the checkout
   is clean, on main and has no commits missing from `origin/main`; runs the full gate on
   `origin/main` in a throwaway worktree; only then fast-forwards, restarts the service and
@@ -73,8 +79,9 @@ restart, including a crash restart (`Restart=on-failure`), so:
 - Strict TypeScript — no `any`, no non-null assertions, no `as` type casts (use Zod parsing instead); Biome enforces all three (`as` via `biome-plugins/no-type-assertion.grit`)
 - Parse all I/O boundaries with Zod — API responses, JSON.parse results, external data. Never trust runtime shapes via `as` assertions; validate with `.parse()` / `.safeParse()`. (`as const` is fine — it narrows literals, doesn't assert shapes)
 - All tool inputs validated with Zod schemas via MCP SDK
+- Every MCP tool has a `title` and `annotations` from `src/tools/annotations.ts` (READ, LOCAL_READ, WRITE, LOCAL_WRITE, DESTRUCTIVE), so clients can tell lookups from changes; `src/tools/annotations.test.ts` enforces it
 - Use pino for logging (`src/logger.ts`), never `console.log/warn/error` — logs must go to stderr to avoid interfering with stdio MCP transport (Biome `noConsole` enforces this in `src/`)
-- Comments should explain *why*, not *what* — no section dividers, no restating what the code does
+- Comments should explain *why*, not *what* — no section dividers (`scripts/check-dividers.ts` in `bun run lint` enforces this), no restating what the code does
 - Browser context is reused across calls — don't create new contexts per request
 - Keep chain-specific browser/API logic (`src/browser/`) isolated from MCP tool definitions (`src/tools/`)
 

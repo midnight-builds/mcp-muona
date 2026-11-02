@@ -76,8 +76,6 @@ function persistAutoSyncConfig(config: AutoSyncConfig): void {
 	setSetting(SETTINGS_KEY, JSON.stringify(config));
 }
 
-// --- Helsinki time-of-day window -------------------------------------------
-
 function helsinkiDateParts(date: Date): HelsinkiDate {
 	const parts = new Intl.DateTimeFormat("en-CA", {
 		timeZone: "Europe/Helsinki",
@@ -162,8 +160,6 @@ export function computeNextEligibleAt(now: Date, intervalMinutes: number): Date 
 	return new Date(now.getTime() + intervalMinutes * 60_000);
 }
 
-// --- 14-day sync range -------------------------------------------------
-
 // Pure, parameterized equivalent of date-range.ts's helsinkiToday()+range
 // helpers: those always read the real system clock, which auto-sync's tests
 // can't fake, so the Helsinki calendar-date computation is repeated here for
@@ -173,8 +169,6 @@ export function last14DayRange(now: Date): { startDate: string; endDate: string 
 	const start = shiftHelsinkiDate(today, -13);
 	return { startDate: formatHelsinkiDate(start), endDate: formatHelsinkiDate(today) };
 }
-
-// --- Run/skip decision ---------------------------------------------------
 
 export type AutoSyncSkipReason =
 	| "disabled"
@@ -202,8 +196,6 @@ export function shouldRunNow(
 	if (!isWithinHelsinkiWindow(config, now)) return { run: false, reason: "outside-window" };
 	return { run: true };
 }
-
-// --- Attempting a sync -----------------------------------------------------
 
 export interface AutoSyncLastRun {
 	at: string;
@@ -238,8 +230,6 @@ export async function runAutoSyncAttempt(params: {
 		return { at: params.now.toISOString(), ok: false, error: message };
 	}
 }
-
-// --- Scheduler state & public API ------------------------------------------
 
 export interface AutoSyncStatus {
 	config: AutoSyncConfig;

@@ -6,12 +6,15 @@ import {
 	parseCouponPricing,
 } from "../browser/s-etukortti-edut.ts";
 import { searchItems } from "../store/receipts-db.ts";
+import { READ } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
 export function registerCouponsTools(server: McpServer): void {
 	server.registerTool(
 		"get_coupons",
 		{
+			title: "S-Etukortti: coupons",
+			annotations: READ,
 			description:
 				"List personalised S-Etukortti coupons/offers (edut) from s-etukortti.fi/edut, with " +
 				"best-effort pricing and redemption info attached. `pricing` is parsed heuristically " +

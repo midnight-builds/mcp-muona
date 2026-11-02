@@ -1,9 +1,18 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logger } from "../logger.ts";
 import {
+	AnonymousIdentityLostError,
 	buildAuthorization,
 	decodeJwtExpiry,
 	extractGraphqlData,
@@ -155,6 +164,39 @@ describe("extractGraphqlData", () => {
 		expect(data.shoppingLists[0]?.shared).toBe(true);
 	});
 
+	test("returns data that came with field errors, so applied writes don't look failed", () => {
+		const data = extractGraphqlData(
+			{
+				data: { shoppingLists: [] },
+				errors: [{ message: "product lookup failed", errorType: "Lambda:Unhandled" }],
+			},
+			ShoppingListsDataSchema,
+		);
+		expect(data.shoppingLists).toEqual([]);
+	});
+
+	test("accepts a store without a name", () => {
+		const data = extractGraphqlData(
+			{
+				data: {
+					shoppingLists: [
+						{
+							id: "l1",
+							name: "Viikko",
+							shared: false,
+							permissions: ["READ"],
+							modifiedAt: "2026-10-30T10:00:00.000Z",
+							store: { id: "513971200", name: null },
+							items: [],
+						},
+					],
+				},
+			},
+			ShoppingListsDataSchema,
+		);
+		expect(data.shoppingLists[0]?.store?.name).toBeNull();
+	});
+
 	test("throws with the GraphQL error messages", () => {
 		expect(() =>
 			extractGraphqlData(
@@ -291,10 +333,11 @@ describe("gql token handling", () => {
 		expect(JSON.parse(readFileSync(path, "utf8")).registered).toBeNull();
 	});
 
-	test("retries once with renewed tokens after an unauthorized response", async () => {
+	test("retries once with a refreshed access token but the same anonymous token", async () => {
 		writeTokens(future());
 		const newAccess = fakeJwt({ exp: future() });
 		let graphqlCalls = 0;
+		let anonymousCalls = 0;
 		mockFetch((call) => {
 			const pathname = new URL(call.url).pathname;
 			if (pathname === "/refresh") {
@@ -303,7 +346,7 @@ describe("gql token handling", () => {
 				);
 			}
 			if (call.body.includes("anonymousUserToken")) {
-				expect(call.headers["x-api-key"]).toBe("test-key");
+				anonymousCalls++;
 				return new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } }));
 			}
 			graphqlCalls++;
@@ -316,7 +359,103 @@ describe("gql token handling", () => {
 		});
 		await gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema);
 		expect(graphqlCalls).toBe(2);
-		expect(calls.at(-1)?.headers.authorization).toBe(`anon-2,${newAccess}`);
+		expect(anonymousCalls).toBe(0);
+		expect(calls.at(-1)?.headers.authorization).toBe(`anon,${newAccess}`);
+		expect(JSON.parse(readFileSync(path, "utf8")).anonymousToken).toBe("anon");
+	});
+
+	// Lists belong to the anonymous token, not the S-tunnus (verified live
+	// 2026-10-30): a new anonymous token would orphan every list Muona owns.
+	test("keeps an expiring anonymous token instead of replacing it", async () => {
+		writeTokens(future());
+		const expiringAnon = fakeJwt({ exp: Math.floor(Date.now() / 1000) - 10 });
+		const stored = JSON.parse(readFileSync(path, "utf8"));
+		writeFileSync(path, JSON.stringify({ ...stored, anonymousToken: expiringAnon }));
+		resetTokenCache();
+		mockFetch((call) =>
+			call.body.includes("anonymousUserToken")
+				? new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } }))
+				: new Response(listsBody),
+		);
+		await gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema);
+		expect(calls.some((c) => c.body.includes("anonymousUserToken"))).toBe(false);
+		expect(calls.at(-1)?.headers.authorization).toStartWith(`${expiringAnon},`);
+	});
+
+	describe("token file damage never swaps the anonymous identity", () => {
+		const corruptFiles = () => readdirSync(dir).filter((f) => f.startsWith("tokens.json.corrupt-"));
+		const anonymousFetches = () => calls.filter((c) => c.body.includes("anonymousUserToken"));
+
+		afterEach(() => {
+			for (const f of corruptFiles()) rmSync(join(dir, f), { recursive: true, force: true });
+			rmSync(path, { recursive: true, force: true });
+		});
+
+		test("an unparseable file is kept aside and no new identity is fetched", async () => {
+			writeFileSync(path, '{"anonymousToken": "an');
+			mockFetch(() => new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } })));
+			await expect(
+				gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
+			).rejects.toBeInstanceOf(AnonymousIdentityLostError);
+			expect(anonymousFetches()).toEqual([]);
+			const kept = corruptFiles();
+			expect(kept).toHaveLength(1);
+			expect(readFileSync(join(dir, kept[0] ?? ""), "utf8")).toBe('{"anonymousToken": "an');
+		});
+
+		test("still refuses after a restart while the kept-aside file exists", async () => {
+			writeFileSync(path, '{"anonymousToken": "an');
+			mockFetch(() => new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } })));
+			await expect(
+				gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
+			).rejects.toBeInstanceOf(AnonymousIdentityLostError);
+			resetTokenCache();
+			await expect(
+				gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
+			).rejects.toBeInstanceOf(AnonymousIdentityLostError);
+			expect(anonymousFetches()).toEqual([]);
+		});
+
+		test("a malformed login keeps the valid anonymous token", async () => {
+			writeFileSync(path, JSON.stringify({ anonymousToken: "anon", registered: { bogus: 1 } }));
+			mockFetch(() => new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } })));
+			await expect(
+				gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
+			).rejects.toBeInstanceOf(NotLoggedInError);
+			expect(anonymousFetches()).toEqual([]);
+			expect(corruptFiles()).toHaveLength(1);
+		});
+
+		test("a read error leaves the file alone and throws", async () => {
+			mkdirSync(path);
+			mockFetch(() => new Response(JSON.stringify({ data: { anonymousUserToken: "anon-2" } })));
+			await expect(
+				gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
+			).rejects.toThrow(/EISDIR/);
+			expect(statSync(path).isDirectory()).toBe(true);
+			expect(corruptFiles()).toEqual([]);
+			expect(anonymousFetches()).toEqual([]);
+		});
+	});
+
+	test("unauthorized errors next to returned data are not retried", async () => {
+		writeTokens(future());
+		mockFetch(
+			() =>
+				new Response(
+					JSON.stringify({
+						data: { shoppingLists: [] },
+						errors: [{ message: "nope", errorType: "UnauthorizedException" }],
+					}),
+				),
+		);
+		const data = await gql(
+			"query GetShoppingLists { shoppingLists { id } }",
+			{},
+			ShoppingListsDataSchema,
+		);
+		expect(data.shoppingLists).toEqual([]);
+		expect(calls).toHaveLength(1);
 	});
 
 	test("transient refresh failure keeps the stored refresh token", async () => {
@@ -326,14 +465,6 @@ describe("gql token handling", () => {
 			gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
 		).rejects.toThrow(/502/);
 		expect(JSON.parse(readFileSync(path, "utf8")).registered.refreshToken).toBe("refresh-1");
-	});
-
-	test("a corrupt token file reads as logged out instead of throwing", async () => {
-		writeFileSync(path, '{"anonymousToken": "an');
-		mockFetch(() => new Response(JSON.stringify({ data: { anonymousUserToken: "anon" } })));
-		await expect(
-			gql("query GetShoppingLists { shoppingLists { id } }", {}, ShoppingListsDataSchema),
-		).rejects.toBeInstanceOf(NotLoggedInError);
 	});
 
 	test("still unauthorized after renewal reports not logged in", async () => {
@@ -631,6 +762,31 @@ describe("gql token handling", () => {
 			expect(target.isCallback("https://kirjautuminen.s-ostoslista.fi/callback?code=abc")).toBe(
 				false,
 			);
+		});
+
+		test("a handed-over login's late callback is exchanged and stored like a silent one", async () => {
+			let seen: Parameters<RunLoginFlow>[0] | null = null;
+			const outcome = await loginWith(async (target) => {
+				seen = target;
+				return { kind: "needs_human", detail: "page kept open" };
+			});
+			expect(outcome).toMatchObject({ ok: false, reason: "needs_human" });
+			if (!seen) throw new Error("no target");
+			const target: Parameters<RunLoginFlow>[0] = seen;
+
+			const accessToken = fakeJwt({ exp: future() });
+			mockFetch(
+				() => new Response(JSON.stringify({ accessToken, idToken: "id", refreshToken: "r2" })),
+			);
+			expect(await target.exchangeCallback(callback)).toEqual({ ok: true });
+			expect(calls[0]?.url).toBe("https://kirjautuminen.s-ostoslista.fi/verify");
+			const stored: unknown = JSON.parse(readFileSync(path, "utf8"));
+			expect(stored).toMatchObject({ registered: { refreshToken: "r2", accessToken } });
+
+			mockFetch(() => new Response(JSON.stringify({ error: "expired" }), { status: 400 }));
+			const failed = await target.exchangeCallback(callback);
+			expect(failed.ok).toBe(false);
+			if (!failed.ok) expect(failed.detail).toContain("/verify HTTP 400");
 		});
 
 		test("exchanges the callback nonce at /verify and stores the tokens", async () => {
