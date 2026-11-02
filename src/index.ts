@@ -37,10 +37,10 @@ const logoDataUri = `data:image/png;base64,${Buffer.from(await Bun.file(logoPath
 // miss from the individual descriptions.
 const INSTRUCTIONS = `Muona: Finnish grocery tools in three groups.
 
-1. S-ostoslista — S-ryhmä's shopping list app (the user's own lists). Tools: get_shopping_lists, get_shopping_list, search_shopping_list_products, add_shopping_list_items, update_shopping_list_items, remove_shopping_list_items, create_shopping_list, delete_shopping_list, share_shopping_list, claim_shared_shopping_list, get_past_products, s_ostoslista_status.
+1. S-ostoslista — S-ryhmä's shopping list app (the user's own lists). Tools: get_shopping_lists, get_shopping_list, search_shopping_list_products, add_shopping_list_items, update_shopping_list_items, remove_shopping_list_items, create_shopping_list, delete_shopping_list, share_shopping_list, claim_shared_shopping_list, blink_shelf_label, get_past_products, s_ostoslista_status.
    Adding a product: get_shopping_lists (list id + store.id) → search_shopping_list_products(storeId, query) → pick the result matching size and variant → add_shopping_list_items(listId, [{ ean, name, quantity }]) with that result's ean and name → read added / alreadyOnList / similarOnList in the result.
    Use free-text items (name only) only for generic things the user did not tie to a product. Items already open on the list are not added twice; raise their quantity with update_shopping_list_items instead.
-   Lists belong to a device, not the S-tunnus: the user's phone lists appear after claim_shared_shopping_list with their share link; lists Muona makes reach the phone via share_shopping_list. Nothing here ever places an order.
+   Lists belong to a device, not the S-tunnus: the user's phone lists appear after claim_shared_shopping_list with their share link; lists Muona makes reach the phone via share_shopping_list. In the store, blink_shelf_label(storeId, ean) blinks a product's electronic shelf label — only when the user asks. Nothing here ever places an order.
 
 2. Web store catalogs — get_stores, search_products: K-Ruoka, S-Kaupat and Alko product search. Not for shopping lists; use search_shopping_list_products there.
 

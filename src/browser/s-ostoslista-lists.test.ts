@@ -527,4 +527,42 @@ describe("shopping list API", () => {
 		});
 		expect(calls[0]?.variables).toEqual({ storeId: "513971200", query: "maito", pageSize: 10 });
 	});
+	test("blinkShelfLabel blinks the label when the store has one for the EAN", async () => {
+		const { call, calls } = fakeGql({
+			EslIsEnabled: { eslIsEnabled: { isEnabled: true } },
+			EslHasLabel: { eslHasLabel: { hasLabel: true } },
+			EslBlinkLabel: { eslBlinkLabel: { success: true, durationSeconds: 30 } },
+		});
+		const result = await createShoppingListApi(call).blinkShelfLabel("513971200", milk.ean);
+		expect(result).toEqual({ status: "blinking", durationSeconds: 30 });
+		expect(calls.map((c) => c.op)).toEqual(["EslIsEnabled", "EslHasLabel", "EslBlinkLabel"]);
+		expect(calls[2]?.variables).toEqual({ storeId: "513971200", ean: milk.ean });
+	});
+
+	test("blinkShelfLabel does not blink in a store without electronic labels", async () => {
+		const { call, calls } = fakeGql({ EslIsEnabled: { eslIsEnabled: { isEnabled: false } } });
+		const result = await createShoppingListApi(call).blinkShelfLabel("513971200", milk.ean);
+		expect(result).toEqual({ status: "store_has_no_electronic_labels" });
+		expect(calls.map((c) => c.op)).toEqual(["EslIsEnabled"]);
+	});
+
+	test("blinkShelfLabel does not blink when the product has no electronic label", async () => {
+		const { call, calls } = fakeGql({
+			EslIsEnabled: { eslIsEnabled: { isEnabled: true } },
+			EslHasLabel: { eslHasLabel: { hasLabel: false } },
+		});
+		const result = await createShoppingListApi(call).blinkShelfLabel("513971200", milk.ean);
+		expect(result).toEqual({ status: "product_has_no_label" });
+		expect(calls.map((c) => c.op)).toEqual(["EslIsEnabled", "EslHasLabel"]);
+	});
+
+	test("blinkShelfLabel reports a blink the store refused", async () => {
+		const { call } = fakeGql({
+			EslIsEnabled: { eslIsEnabled: { isEnabled: true } },
+			EslHasLabel: { eslHasLabel: { hasLabel: true } },
+			EslBlinkLabel: { eslBlinkLabel: { success: false, durationSeconds: 0 } },
+		});
+		const result = await createShoppingListApi(call).blinkShelfLabel("513971200", milk.ean);
+		expect(result).toEqual({ status: "failed" });
+	});
 });
