@@ -8,15 +8,18 @@ describe("findDividers", () => {
 			"// --- Helsinki time-of-day window ----------",
 			"\t// ==========",
 			"// *** Helpers ***",
-			"// Section ------------------",
 		].join("\n");
-		expect(findDividers(text)).toEqual([1, 2, 3, 4]);
+		expect(findDividers(text)).toEqual([1, 2, 3]);
 	});
 
 	test("leaves ordinary comments and code alone", () => {
 		const text = [
 			"// Refresh-before-expiry, plus one retry with fresh tokens.",
 			"// a -> b, then x--",
+			"// TODO ---",
+			"// see https://example.com/foo___",
+			"// Important ***",
+			"// x = y ===",
 			"const dashes = '---';",
 			"/* --- block comments are rare enough to leave to review --- */",
 		].join("\n");

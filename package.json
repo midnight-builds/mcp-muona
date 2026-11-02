@@ -15,7 +15,7 @@
 		"reparse": "bun run scripts/reparse-receipts.ts",
 		"test": "bun test",
 		"test:e2e": "bun test ./e2e/smoke.test.ts",
-		"check": "bunx biome check --write .",
+		"check": "bunx biome check --write . && bun run scripts/check-dividers.ts",
 		"lint": "bunx biome ci . && bun run scripts/check-dividers.ts",
 		"typecheck": "bunx tsc --noEmit",
 		"prepare": "git config core.hooksPath .githooks || true",
