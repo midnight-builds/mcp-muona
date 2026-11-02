@@ -3,4 +3,6 @@
 # that nobody reaches for --no-verify.
 set -e
 bunx biome check --staged --no-errors-on-unmatched
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.ts')
+[ -z "$staged" ] || bun run scripts/check-dividers.ts $staged
 bun run typecheck
