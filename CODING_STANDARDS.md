@@ -13,10 +13,12 @@ non-null assertions, no `console`); this file holds the judgement calls they can
   Authorized" for Muona's tokens (PR #6, PR #10). Unit tests with a fake GraphQL layer pass
   for any operation, so they are no evidence here. S-ostoslista operations are checked with
   `scripts/sostoslista-probe.ts`; a mutation is probed where it cannot take effect.
-- **A write that may have applied is never retried or re-sent.** A timeout, partial data or
-  an auth error after a mutation leaves its effect unknown: report it, then read the state
-  again. The same goes for identity: the stored S-ostoslista anonymous token owns every list
-  Muona made, so code never replaces it.
+- **A write that may have applied is never retried or re-sent.** A timeout, a 5xx or partial
+  data after a mutation leaves its effect unknown: report it, then read the state again. A
+  rejection by the API's authorizer is the exception: it comes before any resolver runs, so
+  `gql`'s re-send after renewing tokens (`src/browser/s-ostoslista.ts`) is safe. The same
+  care goes for identity: the stored S-ostoslista anonymous token owns every list Muona
+  made, so code never replaces it.
 
 ## Writes
 
