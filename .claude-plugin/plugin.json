@@ -1,6 +1,6 @@
 {
 	"name": "muona",
-	"description": "S-Etukortti purchase receipts and purchase history, plus Finnish grocery and alcohol product search across K-Ruoka, S-Kaupat, and Alko via MCP",
+	"description": "Your S-Etukortti receipts, bonus and S-ostoslista shopping lists for your AI assistant, plus product search across K-Ruoka, S-Kaupat and Alko",
 	"version": "0.3.0",
 	"author": {
 		"name": "Midnight builds"
