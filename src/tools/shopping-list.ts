@@ -416,4 +416,32 @@ export function registerShoppingListTools(server: McpServer): void {
 				return ok(summarizeList(await shoppingListApi.claimSharedShoppingList(link), true));
 			}),
 	);
+
+	server.registerTool(
+		"blink_shelf_label",
+		{
+			title: "S-ostoslista: blink a product's shelf label",
+			annotations: { ...WRITE, idempotentHint: true },
+			description:
+				"Make a product's electronic shelf label blink in a store, the S-ostoslista app's " +
+				'"find it on the shelf" feature, so the user can spot the product while shopping. ' +
+				"Blinks a real label in the store for a short while: only call it when the user " +
+				"asks, typically while standing in that store. storeId is the list's store.id and ean " +
+				"the item's ean from get_shopping_list (product items only; free-text items have no " +
+				"label), or a result from search_shopping_list_products. status is blinking (with " +
+				"durationSeconds), store_has_no_electronic_labels, product_has_no_label or failed. " +
+				LOGIN_NOTE,
+			inputSchema: z.object({
+				storeId: z.string().min(1).describe("SOK store id: the list's store.id"),
+				ean: z
+					.string()
+					.regex(/^\d{8,14}$/)
+					.describe("The product's ean in that store"),
+			}),
+		},
+		async ({ storeId, ean }) =>
+			run("Error blinking shelf label", async () => {
+				return ok({ storeId, ean, ...(await shoppingListApi.blinkShelfLabel(storeId, ean)) });
+			}),
+	);
 }
