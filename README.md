@@ -1,22 +1,33 @@
 # Muona
 
-MCP server for **S-Etukortti purchase receipts** ([s-etukortti.fi](https://s-etukortti.fi)):
-fetches a logged-in S-ryhmä member's receipts, bonus and discount data, keeps a local
-SQLite purchase history, and reads and edits S-ostoslista shopping lists. It also includes Finnish
-grocery and alcohol product search:
+Muona lets your AI assistant take care of the grocery side of everyday life. Connect it
+to Claude or any other MCP client, and you can ask things like *"how much did I spend on
+coffee this year?"*, *"how much bonus have I earned this month?"* or *"put milk and rye
+bread on our shopping list"*.
 
-- **S-Etukortti** — Playwright persistent profile with a manually established email-OTP
-  login; API calls share the profile's HttpOnly session cookies and a CSRF token
-  sniffed from the page's own traffic
-- **S-ostoslista** — the SOK shopping-list app's GraphQL API, signed in through the same
-  S-tunnus session; lists move between the phone and Muona via share links
-- **K-Ruoka** — Playwright browser with stealth plugin (Cloudflare Turnstile bypass)
-- **S-Kaupat** — Direct HTTP with persisted GraphQL query hashes (extracted via Playwright)
-- **Alko** — Direct HTTP with NextAuth guest session (no browser needed)
+What it can do:
 
-Muona is a single-user personal tool: it reads only the logged-in user's own data,
-and every human authentication step (captcha, one-time code, strong authentication)
-stays manual.
+- **Your S-Etukortti receipts** ([s-etukortti.fi](https://s-etukortti.fi)): every purchase
+  from S-ryhmä stores, plus your bonus, coupons and discounts. Receipts are kept in a local
+  purchase history that you can search and dig into.
+- **Your S-ostoslista shopping lists**: read and edit the same lists you use in the
+  S-ostoslista app on your phone.
+- **Product search** across K-ryhmä's K-Ruoka, S-ryhmä's S-Kaupat and Alko.
+
+Muona is a personal tool for one person. It only ever reads your own data, and you stay
+in charge of every login step: when S-Etukortti asks for a one-time code or bank ID,
+Muona hands the step to you and never tries to get past it on its own.
+
+### Under the hood
+
+- **S-Etukortti**: a persistent Playwright browser profile holds the login you complete
+  yourself (email one-time code). API calls reuse the profile's HttpOnly session cookies
+  and a CSRF token picked up from the page's own traffic.
+- **S-ostoslista**: the SOK shopping-list app's GraphQL API, signed in through the same
+  S-tunnus session. Lists move between your phone and Muona via share links.
+- **K-Ruoka**: a Playwright browser with the stealth plugin (Cloudflare Turnstile bypass).
+- **S-Kaupat**: direct HTTP with persisted GraphQL query hashes (extracted via Playwright).
+- **Alko**: direct HTTP with a NextAuth guest session, no browser needed.
 
 ## Credits
 
