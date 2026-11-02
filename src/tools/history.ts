@@ -3,6 +3,7 @@ import * as z from "zod/v4";
 import { defaultSyncRange } from "../date-range.ts";
 import { getStats, resolveDbPath, searchItems } from "../store/receipts-db.ts";
 import { syncReceipts } from "../store/sync.ts";
+import { LOCAL_READ, WRITE } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
 const DATE = z
@@ -14,6 +15,8 @@ export function registerHistoryTools(server: McpServer): void {
 	server.registerTool(
 		"sync_receipts",
 		{
+			title: "Purchase history: sync receipts",
+			annotations: { ...WRITE, idempotentHint: true },
 			description:
 				"Download receipts from S-Etukortti into the local purchase-history database " +
 				"(fetches summaries for the date range, then full line-item detail for any receipts " +
@@ -40,6 +43,8 @@ export function registerHistoryTools(server: McpServer): void {
 	server.registerTool(
 		"search_purchases",
 		{
+			title: "Purchase history: search",
+			annotations: LOCAL_READ,
 			description:
 				"Search the local purchase-history database (no network access) for previously " +
 				"purchased items by name, date range, and/or store. Use sync_receipts first if the " +
@@ -72,6 +77,8 @@ export function registerHistoryTools(server: McpServer): void {
 	server.registerTool(
 		"purchase_history_stats",
 		{
+			title: "Purchase history: coverage",
+			annotations: LOCAL_READ,
 			description:
 				"Summary of the local long-term purchase-history database: receipt and item counts, " +
 				"the covered date range, and how many receipts failed to parse cleanly. This database " +

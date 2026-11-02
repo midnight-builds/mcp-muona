@@ -2,12 +2,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { getAutoSyncConfig, getAutoSyncStatus, updateAutoSyncConfig } from "../auto-sync.ts";
 import { resolveDbPath } from "../store/receipts-db.ts";
+import { LOCAL_READ, LOCAL_WRITE } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
 export function registerAutoSyncTools(server: McpServer): void {
 	server.registerTool(
 		"configure_auto_sync",
 		{
+			title: "Auto-sync: configure",
+			annotations: { ...LOCAL_WRITE, idempotentHint: true },
 			description:
 				"Configures the automatic background receipt sync (interval and allowed Helsinki-time " +
 				"window, default 06-23). Manual syncs are always available via sync_receipts regardless " +
@@ -54,6 +57,8 @@ export function registerAutoSyncTools(server: McpServer): void {
 	server.registerTool(
 		"auto_sync_status",
 		{
+			title: "Auto-sync: status",
+			annotations: LOCAL_READ,
 			description:
 				"Reports when receipts were last fetched automatically, whether it succeeded, and when " +
 				"the next automatic sync is due. See also s_etukortti_session_status for a broader " +
