@@ -8,7 +8,7 @@
 //
 // Env:
 //   LOGIN_EMAIL          skip the email prompt
-//   S_ETUKORTTI_HEADED=1 run with a visible browser window (needs a display)
+//   S_ETUKORTTI_SCREEN_SIZE with DISPLAY: run with a visible browser window
 //   S_ETUKORTTI_DATA_DIR override the profile directory
 
 import { mkdirSync } from "node:fs";

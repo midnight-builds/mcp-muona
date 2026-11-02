@@ -86,6 +86,7 @@ kept out of unencrypted backups (`chmod 700`).
 - **get_stores** — List stores, optionally filtered by city and/or chain.
 - **get_receipts** — List S-Etukortti receipts (id, store, time, total) for a date range; defaults to the current month.
 - **get_receipt** — One receipt with the raw printed text plus parsed line items (name, price, weight/quantity, unit price, campaign discounts).
+- **get_bonus_status** — Quick look at this month's bonus: percentage, purchases so far, and how much more is needed for the next bonus level.
 - **get_bonus_summary** — Monthly bonus percentage, benefit amounts, purchase totals and the co-op's bonus level table.
 - **get_benefit_totals** — Accumulated benefits (bonus, fuel discount, surplus) over a month range.
 - **get_discounts** — Campaign discounts received, per month and per purchase.
@@ -99,14 +100,46 @@ kept out of unencrypted backups (`chmod 700`).
 - **sync_receipts** — Downloads receipts into the local SQLite purchase-history database (`data/receipts.sqlite`, `MUONA_DB_PATH`).
 - **search_purchases** — Searches the local purchase history by item name, date range and store (no network).
 - **purchase_history_stats** — Local history coverage: receipt/item counts, date range, totals.
+- **configure_auto_sync / auto_sync_status** — Turn the background receipt sync on or off, change how often and at which hours it runs, and see when it last ran and when it runs next.
+- **get_coupons** — Your personalised S-Etukortti coupons and offers. Prices are read from the coupon text, and whether you have already used a coupon is a guess based on the local purchase history, so run `sync_receipts` first.
 
 ## Local purchase history
 
-Long-term history lives in SQLite (`bun:sqlite`, file `data/receipts.sqlite`). Backfill or
-top up with `bun run sync --start YYYY-MM-DD --end YYYY-MM-DD` (defaults to the last ~2
-months) or the `sync_receipts` MCP tool; syncs are idempotent and only fetch missing
-receipt details. The receipt-text parser is verified against every synced receipt
-(`parser_ok` column; grocery, fuel-pump and EV-charging formats supported).
+Muona keeps your receipts in a local SQLite database, so searching your purchases and
+working out statistics is fast and needs no network. The database is
+`data/receipts.sqlite` by default; set `MUONA_DB_PATH` to keep it somewhere else.
+
+**What is stored.** One row per receipt (store, time, total and the original receipt
+text) and one row per receipt line (product name, price, quantity, unit price,
+discount). The same file holds Muona's own settings, such as the auto-sync
+configuration. This is your personal shopping history: `data/` is gitignored, so it
+never ends up in the repository, and backing it up is up to you. Back up the whole
+`data/` folder, which also holds the S-ostoslista device identity (see below).
+
+**Keeping it up to date.**
+
+- *Automatically:* while the server runs, it fetches the last 14 days of receipts every
+  60 minutes between 06:00 and 23:00 Helsinki time. Ask your assistant to change the
+  interval or the hours, or to turn it off, with `configure_auto_sync`;
+  `auto_sync_status` shows when it last ran and when it runs next.
+- *On request:* `sync_receipts` fetches any period you ask for, e.g. a whole year when
+  you first set Muona up.
+- *From the command line:* `bun run sync --start YYYY-MM-DD --end YYYY-MM-DD` (by default
+  from the first day of the month two months ago until today). It uses the same browser
+  profile as the server, and only one process may use the profile at a time, so it only
+  works while the server is stopped. While the server runs, use `sync_receipts` instead.
+
+Syncing the same period again is safe: receipt summaries are refreshed and only receipt
+details not yet stored are downloaded.
+
+**Using it.** `search_purchases` finds purchases by product name, date range and store,
+and `purchase_history_stats` shows how much history there is. `get_coupons` uses the
+history to guess which coupons you have already used.
+
+**Receipt parsing.** Each receipt's text is split into product lines and checked against
+the receipt total (the `parser_ok` column); grocery, fuel-pump and EV-charging receipts
+are supported. After improving the parser (`src/receipt-text.ts`), `bun run reparse`
+re-parses every stored receipt without downloading anything again.
 
 ## S-ostoslista lists and sharing
 
@@ -134,6 +167,11 @@ Run the HTTP server under a process manager (e.g. a systemd unit with
 `WorkingDirectory` set to the repo and `ExecStart=bun run src/index.ts`). Set `PORT` and
 `MCP_AUTH_TOKEN` in `.env` (bearer auth). The startup warmup re-opens the S-Etukortti
 session from the persistent profile and starts the keepalive.
+
+After updating dependencies, run `bunx playwright install chromium chromium-headless-shell`
+before restarting. A new Playwright version looks for a new browser build, and without it
+every browser launch fails: S-Etukortti looks logged out, and the K-Ruoka and S-Kaupat
+searches stop working. Muona's own deploy script (`scripts/deploy.sh`) does this for you.
 
 Optional remote login screen (bank strong auth), bound to localhost and exposed only over
 a private network such as a Tailscale tailnet:
@@ -213,7 +251,27 @@ cp .env.example .env
 bun run dev
 ```
 
+`bun install` does not download browsers. Install the Chromium build that this
+Playwright version expects (again after every Playwright update):
+
+```bash
+bunx playwright install chromium chromium-headless-shell
+```
+
 The server runs on `http://localhost:3001/mcp` by default (Streamable HTTP). Pass `--stdio` for stdio transport.
+
+Checks, in the order CI runs them; all must pass before merging:
+
+```bash
+bun run lint        # Biome and the comment rules
+bun run typecheck
+bun test            # unit tests in src/
+bun run build
+bun run test:e2e    # smoke test against the built bundle
+```
+
+`bun run check` applies Biome's fixes, and `bun install` sets up a pre-commit hook that
+runs lint and the type check.
 
 ## Environment variables
 
@@ -225,10 +283,15 @@ The server runs on `http://localhost:3001/mcp` by default (Streamable HTTP). Pas
 | `PORT` | Server port (default: 3001) |
 | `LOG_LEVEL` | pino log level (default: info) |
 | `BROWSER_DATA_DIR` | Persistent browser data directory (default: `.browser-data/`) |
+| `MUONA_DB_PATH` | Purchase-history SQLite database (default: `data/receipts.sqlite`) |
+| `S_ETUKORTTI_DATA_DIR` | S-Etukortti browser profile holding the login session (default: `.browser-data-s-etukortti/`) |
+| `S_ETUKORTTI_KEEPALIVE_HOURS` | How often the S-Etukortti session is refreshed, in hours (default 6, 1–24) |
 | `S_ETUKORTTI_SCREEN_SIZE` | e.g. `480x960`: run the S-Etukortti browser headed on `DISPLAY` at this size |
 | `S_ETUKORTTI_REMOTE_SCREEN_URL` | Public (tailnet) base URL of the noVNC remote login screen |
 | `S_ETUKORTTI_REMOTE_SCREEN_MINUTES` | Remote screen time limit (default 15) |
 | `S_OSTOSLISTA_API_KEY` | AppSync API key shipped in the S-ostoslista app (in `.env`) |
+| `MUONA_SKIP_WARMUP` | `1` skips opening the browsers at startup (used by the e2e smoke test) |
+| `LOGIN_EMAIL` | `bun run login` only: use this email instead of asking for it |
 | `S_OSTOSLISTA_TOKEN_PATH` | S-ostoslista token file (default `data/s-ostoslista-tokens.json`); holds the device identity that owns the lists — back it up |
 
 ## Usage examples
