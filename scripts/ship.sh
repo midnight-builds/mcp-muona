@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Merges a green PR and cleans up after it, in the order that works with
-# worktrees: `gh pr merge --delete-branch` fails while a worktree still has the
-# branch checked out, and `gh pr checks --watch` right after a push reports
-# "no checks" before CI has registered. Deploying stays a separate step
+# worktrees: the local branch cannot be deleted while a worktree still has it
+# checked out, and `gh pr checks --watch` right after a push reports "no checks"
+# before CI has registered. Deploying stays a separate step
 # (`bun run deploy`) because a restart cuts off a login in progress — check
 # s_etukortti_session_status first.
 #
@@ -26,7 +26,9 @@ read -r merge_state old_head <<<"$(gh pr view "$pr" --json mergeStateStatus,head
 	--jq '[.mergeStateStatus, .headRefOid] | @tsv')"
 if [ "$merge_state" = "BEHIND" ]; then
 	echo "ship: #$pr is behind main; updating its branch"
-	gh pr update-branch "$pr"
+	# REST, not `gh pr update-branch`: that subcommand only exists in newer gh
+	# releases than the distro package this server runs.
+	gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/update-branch" --silent
 	for _ in $(seq 1 30); do
 		[ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" != "$old_head" ] && break
 		sleep 2
@@ -65,7 +67,9 @@ if [ -n "$worktree" ]; then
 	echo "ship: removed worktree $worktree"
 fi
 
-gh pr merge "$pr" --squash --delete-branch --match-head-commit "$head"
+# No --delete-branch: the repo deletes merged branches itself, and gh's own
+# delete then gets a 404 and fails the script before the cleanup below.
+gh pr merge "$pr" --squash --match-head-commit "$head"
 git branch -D "$branch" 2>/dev/null || true
 git fetch --quiet --prune origin
 echo "ship: #$pr merged as $(git rev-parse --short origin/main)"
