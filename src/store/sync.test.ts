@@ -243,7 +243,7 @@ describe("syncReceipts coverage", () => {
 		expect(result.detailsFetched).toBe(1);
 	});
 
-	test("a receipt whose detail failed more than 14 days ago is left to an explicit backfill", async () => {
+	test("a receipt first seen more than 14 days ago is left to an explicit backfill", async () => {
 		const old = makeSummary("123456_8", "2026-10-01T10:00:00+03:00", 3.98);
 		await syncReceipts({
 			startDate: "2026-10-01",
@@ -261,6 +261,7 @@ describe("syncReceipts coverage", () => {
 			startDate: "2026-11-02",
 			endDate: "2026-11-03",
 			today: "2026-11-03",
+			now: new Date(Date.now() + 15 * 86_400_000),
 			fetchDelayMs: 0,
 			fetchReceipts: async () => [],
 			fetchReceipt: async (receiptId) => {
@@ -269,6 +270,35 @@ describe("syncReceipts coverage", () => {
 			},
 		});
 		expect(retried).toEqual([]);
+	});
+
+	test("an old receipt first seen after an outage still gets retries though coverage moves on", async () => {
+		const old = makeSummary("123456_6", "2026-10-10T10:00:00+03:00", 3.98);
+		await syncReceipts({
+			startDate: "2026-10-09",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async (startDate) => (startDate.startsWith("2026-10") ? [old] : []),
+			fetchReceipt: async () => {
+				throw new Error("HTTP 502");
+			},
+		});
+		expect(getSyncCoverage()?.through).toBe("2026-11-03");
+
+		const retried: string[] = [];
+		await syncReceipts({
+			startDate: "2026-11-02",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [],
+			fetchReceipt: async (receiptId) => {
+				retried.push(receiptId);
+				return makeDetail(old, 3.98);
+			},
+		});
+		expect(retried).toEqual(["123456_6"]);
 	});
 
 	test("an existing coverage advances past a run with a failed detail", async () => {

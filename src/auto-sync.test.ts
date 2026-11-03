@@ -265,6 +265,7 @@ describe("runAutoSyncAttempt", () => {
 			ok: true,
 			summariesUpserted: 3,
 			detailsFetched: 2,
+			detailErrors: 0,
 		});
 	});
 

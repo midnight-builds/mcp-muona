@@ -298,17 +298,16 @@ export function getReceipt(receiptId: string): StoredReceipt | null {
 	};
 }
 
-// `since` (YYYY-MM-DD) compares against transaction_start's leading date,
-// which is the Helsinki calendar date the API reports.
-export function listReceiptsMissingDetail(since?: string): string[] {
+// `firstSeenSince` limits to receipts whose summary was first stored at or
+// after that instant; created_at and toISOString() share one UTC format, so
+// they compare as strings.
+export function listReceiptsMissingDetail(firstSeenSince?: Date): string[] {
 	const rows =
-		since === undefined
+		firstSeenSince === undefined
 			? getDb().query("SELECT receipt_id FROM receipts WHERE raw_text IS NULL").all()
 			: getDb()
-					.query(
-						"SELECT receipt_id FROM receipts WHERE raw_text IS NULL AND transaction_start >= ?",
-					)
-					.all(since);
+					.query("SELECT receipt_id FROM receipts WHERE raw_text IS NULL AND created_at >= ?")
+					.all(firstSeenSince.toISOString());
 	return rows.map((row) => ReceiptIdRowSchema.parse(row).receipt_id);
 }
 

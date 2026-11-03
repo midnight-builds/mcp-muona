@@ -207,6 +207,7 @@ export interface AutoSyncLastRun {
 	ok: boolean;
 	summariesUpserted?: number;
 	detailsFetched?: number;
+	detailErrors?: number;
 	error?: string;
 	sessionExpired?: boolean;
 }
@@ -235,6 +236,7 @@ export async function runAutoSyncAttempt(params: {
 			ok: true,
 			summariesUpserted: summary.summariesUpserted,
 			detailsFetched: summary.detailsFetched,
+			detailErrors: summary.errors.length,
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
