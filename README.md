@@ -118,16 +118,30 @@ never ends up in the repository, and backing it up is up to you. Back up the who
 
 **Keeping it up to date.**
 
-- *Automatically:* while the server runs, it fetches the last 14 days of receipts every
-  60 minutes between 06:00 and 23:00 Helsinki time. Ask your assistant to change the
-  interval or the hours, or to turn it off, with `configure_auto_sync`;
-  `auto_sync_status` shows when it last ran and when it runs next.
-- *On request:* `sync_receipts` fetches any period you ask for, e.g. a whole year when
-  you first set Muona up.
-- *From the command line:* `bun run sync --start YYYY-MM-DD --end YYYY-MM-DD` (by default
-  from the first day of the month two months ago until today). It uses the same browser
-  profile as the server, and only one process may use the profile at a time, so it only
-  works while the server is stopped. While the server runs, use `sync_receipts` instead.
+- *Automatically:* while the server runs, it syncs every 60 minutes between 06:00 and
+  23:00 Helsinki time. Ask your assistant to change the interval or the hours, or to turn
+  it off, with `configure_auto_sync`; `auto_sync_status` shows when it last ran and when
+  it runs next.
+- *On request:* `sync_receipts` without dates fetches what is new; with dates it fetches
+  any period you ask for, e.g. a whole year when you first set Muona up.
+- *From the command line:* `bun run sync`, or `bun run sync --start YYYY-MM-DD --end
+  YYYY-MM-DD` for a given period. It uses the same browser profile as the server, and only
+  one process may use the profile at a time, so it only works while the server is
+  stopped. While the server runs, use `sync_receipts` instead.
+
+Muona remembers the last day up to which the history is complete, and a sync without
+dates asks S-Etukortti only for that day and the ones after it, starting a day early in
+case a receipt shows up late. Usually that is yesterday and today; after the server has
+been off for a while, it is the whole gap. The very first sync fetches the last 14 days
+(automatic) or from the first day of the month two months ago (`sync_receipts`,
+`bun run sync`). A receipt whose details fail to download is tried again by every sync
+for 14 days after Muona first saw it; after that, only a sync with dates covering it
+fetches it. `auto_sync_status` shows how many failed in the last run (`detailErrors`).
+
+When the S-Etukortti session has expired and only you can renew it (one-time code or
+bank ID), automatic syncing pauses instead of asking S-Etukortti every hour for nothing;
+`auto_sync_status` shows this as `waitingForLogin`. It continues by itself once you have
+logged in.
 
 Syncing the same period again is safe: receipt summaries are refreshed and only receipt
 details not yet stored are downloaded.

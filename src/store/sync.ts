@@ -7,6 +7,7 @@
 import * as z from "zod/v4";
 import type { ReceiptDetail, ReceiptSummary } from "../browser/s-etukortti.ts";
 import * as sEtukortti from "../browser/s-etukortti.ts";
+import { helsinkiTodayDate } from "../date-range.ts";
 import { logger } from "../logger.ts";
 import { parseReceiptText } from "../receipt-text.ts";
 import {
@@ -14,6 +15,7 @@ import {
 	saveReceiptDetail,
 	upsertReceiptSummary,
 } from "./receipts-db.ts";
+import { recordSyncedRange } from "./sync-coverage.ts";
 
 export const SyncSummarySchema = z.object({
 	months: z.array(z.string()),
@@ -37,6 +39,10 @@ export interface SyncOptions {
 	fetchDelayMs?: number;
 	fetchReceipts?: (startDate: string, endDate: string) => Promise<ReceiptSummary[]>;
 	fetchReceipt?: (receiptId: string) => Promise<ReceiptDetail>;
+	/** Helsinki calendar date treated as today (default: the real one). */
+	today?: string;
+	/** Current instant (default: the real one). */
+	now?: Date;
 }
 
 interface MonthChunk {
@@ -99,6 +105,7 @@ function monthChunks(startDate: string, endDate: string): MonthChunk[] {
 }
 
 const PARSER_MATCH_TOLERANCE = 0.005;
+const DETAIL_RETRY_MS = 14 * 24 * 60 * 60 * 1000;
 
 export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 	const {
@@ -124,8 +131,20 @@ export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 		}
 	}
 
+	// Receipts first seen in the last 14 days whose detail is still missing
+	// are retried even outside this range: syncs without dates cover only the
+	// last day or two. Counting from first sight, not the purchase date, gives
+	// an old receipt found after an outage the same 14 days; after that it is
+	// left to an explicit backfill rather than retried forever.
+	const today = options.today ?? helsinkiTodayDate();
+	const now = options.now ?? new Date();
 	const missingDetailIds = new Set(listReceiptsMissingDetail());
-	const toFetch = [...seenReceiptIds].filter((id) => missingDetailIds.has(id));
+	const toFetch = [
+		...new Set([
+			...[...seenReceiptIds].filter((id) => missingDetailIds.has(id)),
+			...listReceiptsMissingDetail(new Date(now.getTime() - DETAIL_RETRY_MS)),
+		]),
+	];
 
 	const parserMismatches: SyncSummary["parserMismatches"] = [];
 	const errors: SyncSummary["errors"] = [];
@@ -157,6 +176,10 @@ export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 			errors.push({ receiptId, message });
 		}
 	}
+
+	// Every receipt in the range is now listed; failed details don't hold the
+	// coverage back, since they are retried above while recent.
+	recordSyncedRange({ startDate, endDate }, today, now);
 
 	return SyncSummarySchema.parse({
 		months,

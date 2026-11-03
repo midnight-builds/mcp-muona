@@ -3,12 +3,15 @@
 // (see src/store/receipts-db.ts) and prints a human-readable summary.
 //
 // Usage: bun run scripts/sync-receipts.ts [--start YYYY-MM-DD] [--end YYYY-MM-DD]
-// Defaults: start = 1st of the month two months ago, end = today (Europe/Helsinki).
+// Without dates: from the day before the last successfully synced day through
+// today, or from the 1st of the month two months ago when nothing is synced
+// yet (Europe/Helsinki). A missing --start or --end falls back to the latter.
 
-import { defaultSyncRange } from "../src/date-range.ts";
+import { defaultSyncRange, helsinkiTodayDate } from "../src/date-range.ts";
 import { logger } from "../src/logger.ts";
 import { closeDb } from "../src/store/receipts-db.ts";
 import { syncReceipts } from "../src/store/sync.ts";
+import { resolveManualSyncRange } from "../src/store/sync-coverage.ts";
 
 const say = (msg: string) => process.stdout.write(`${msg}\n`);
 
@@ -26,9 +29,8 @@ function parseArgs(argv: string[]): { startDate?: string; endDate?: string } {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const defaults = defaultSyncRange();
-	const startDate = args.startDate ?? defaults.startDate;
-	const endDate = args.endDate ?? defaults.endDate;
+	const today = helsinkiTodayDate();
+	const { startDate, endDate, basis } = resolveManualSyncRange(args, today, defaultSyncRange());
 
 	if (!DATE_RE.test(startDate) || !DATE_RE.test(endDate)) {
 		process.stderr.write(
@@ -37,10 +39,10 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	logger.info({ startDate, endDate }, "Starting receipt sync");
-	const summary = await syncReceipts({ startDate, endDate });
+	logger.info({ startDate, endDate, basis }, "Starting receipt sync");
+	const summary = await syncReceipts({ startDate, endDate, today });
 
-	say(`Range: ${startDate}..${endDate} (${summary.months.join(", ")})`);
+	say(`Range: ${startDate}..${endDate}, ${basis} (${summary.months.join(", ")})`);
 	say(`Summaries upserted: ${summary.summariesUpserted}`);
 	say(`Details fetched: ${summary.detailsFetched}`);
 

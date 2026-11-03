@@ -42,3 +42,19 @@ export function defaultSyncRange(): { startDate: string; endDate: string } {
 		endDate: formatHelsinkiDate(today),
 	};
 }
+
+export function helsinkiTodayDate(): string {
+	return formatHelsinkiDate(helsinkiToday());
+}
+
+// Calendar arithmetic on YYYY-MM-DD strings; UTC is used only as a
+// timezone-free calendar, so DST never shifts the result.
+export function shiftDate(date: string, days: number): string {
+	const [year, month, day] = date.split("-").map(Number);
+	const shifted = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1) + days));
+	return formatHelsinkiDate({
+		year: shifted.getUTCFullYear(),
+		month: shifted.getUTCMonth() + 1,
+		day: shifted.getUTCDate(),
+	});
+}

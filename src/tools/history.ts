@@ -1,8 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { defaultSyncRange } from "../date-range.ts";
+import { defaultSyncRange, helsinkiTodayDate } from "../date-range.ts";
 import { getStats, resolveDbPath, searchItems } from "../store/receipts-db.ts";
 import { syncReceipts } from "../store/sync.ts";
+import { resolveManualSyncRange } from "../store/sync-coverage.ts";
 import { LOCAL_READ, WRITE } from "./annotations.ts";
 import { ok, run } from "./tool-result.ts";
 
@@ -21,22 +22,27 @@ export function registerHistoryTools(server: McpServer): void {
 				"Download receipts from S-Etukortti into the local purchase-history database " +
 				"(fetches summaries for the date range, then full line-item detail for any receipts " +
 				"not already stored). Requires a valid S-Etukortti session — see " +
-				"s_etukortti_session_status if this fails. Defaults to the last ~2 months.",
+				"s_etukortti_session_status if this fails. Without dates it fetches only what is new: " +
+				"from the day before the last successfully synced day through today (the last ~2 " +
+				"months the first time). Pass dates only to backfill an older period; the background " +
+				"auto-sync keeps recent days current, so a routine call needs no dates.",
 			inputSchema: z.object({
 				startDate: DATE.optional().describe(
-					"First day to sync (default: 1st of the month two months ago)",
+					"First day to sync; give it only for a backfill (default: see description)",
 				),
 				endDate: DATE.optional().describe("Last day to sync (default: today)"),
 			}),
 		},
 		async ({ startDate, endDate }) =>
 			run("Error syncing receipts", async () => {
-				const defaults = defaultSyncRange();
+				const today = helsinkiTodayDate();
+				const range = resolveManualSyncRange({ startDate, endDate }, today, defaultSyncRange());
 				const summary = await syncReceipts({
-					startDate: startDate ?? defaults.startDate,
-					endDate: endDate ?? defaults.endDate,
+					startDate: range.startDate,
+					endDate: range.endDate,
+					today,
 				});
-				return ok(summary);
+				return ok({ range, ...summary });
 			}),
 	);
 
