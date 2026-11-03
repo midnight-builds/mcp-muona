@@ -298,8 +298,17 @@ export function getReceipt(receiptId: string): StoredReceipt | null {
 	};
 }
 
-export function listReceiptsMissingDetail(): string[] {
-	const rows = getDb().query("SELECT receipt_id FROM receipts WHERE raw_text IS NULL").all();
+// `since` (YYYY-MM-DD) compares against transaction_start's leading date,
+// which is the Helsinki calendar date the API reports.
+export function listReceiptsMissingDetail(since?: string): string[] {
+	const rows =
+		since === undefined
+			? getDb().query("SELECT receipt_id FROM receipts WHERE raw_text IS NULL").all()
+			: getDb()
+					.query(
+						"SELECT receipt_id FROM receipts WHERE raw_text IS NULL AND transaction_start >= ?",
+					)
+					.all(since);
 	return rows.map((row) => ReceiptIdRowSchema.parse(row).receipt_id);
 }
 

@@ -11,12 +11,16 @@ import {
 	computeNextRunInWindowAt,
 	DEFAULT_AUTO_SYNC_CONFIG,
 	getAutoSyncConfig,
+	getAutoSyncStatus,
 	isWithinHelsinkiWindow,
 	type LoginPause,
 	last14DayRange,
 	pauseAfterAttempt,
+	resetAutoSyncRuntime,
 	runAutoSyncAttempt,
+	runAutoSyncTick,
 	shouldRunNow,
+	startAutoSync,
 	stillPaused,
 	updateAutoSyncConfig,
 } from "./auto-sync.ts";
@@ -32,6 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	resetAutoSyncRuntime();
 	closeSettingsDb();
 	for (const suffix of ["", "-wal", "-shm"]) {
 		const path = `${dbPath}${suffix}`;
@@ -355,5 +360,79 @@ describe("login pause", () => {
 
 	test("resumes once any sync has succeeded since the pause began", () => {
 		expect(stillPaused(pause, "awaiting_otp", "2026-11-01T07:30:00.000Z")).toBe(false);
+	});
+});
+
+describe("runAutoSyncTick login pause", () => {
+	const okSummary = {
+		months: ["2026-11"],
+		summariesUpserted: 0,
+		detailsFetched: 0,
+		parserMismatches: [],
+		errors: [],
+	};
+	// 08:00 UTC is 10:00 in Helsinki: inside the default 06-23 window.
+	let clock = new Date("2026-11-01T08:00:00.000Z");
+	let block: string | null = "awaiting_otp";
+	let calls = 0;
+	let fail = true;
+
+	beforeEach(() => {
+		clock = new Date("2026-11-01T08:00:00.000Z");
+		block = "awaiting_otp";
+		calls = 0;
+		fail = true;
+		startAutoSync({
+			now: () => clock,
+			reloginBlock: () => block,
+			syncFn: async () => {
+				calls += 1;
+				if (fail) throw new SessionExpiredError("blocked", "Relogin blocked.");
+				return okSummary;
+			},
+		});
+	});
+
+	const hoursLater = (hours: number) => {
+		clock = new Date(clock.getTime() + hours * 3_600_000);
+	};
+
+	test("a session-expired failure while blocked pauses later runs and says why", async () => {
+		await runAutoSyncTick();
+		expect(calls).toBe(1);
+		expect(getAutoSyncStatus().waitingForLogin?.reason).toBe("awaiting_otp");
+
+		hoursLater(2);
+		await runAutoSyncTick();
+		expect(calls).toBe(1);
+	});
+
+	test("resumes on the first tick after a human login clears the block", async () => {
+		await runAutoSyncTick();
+		hoursLater(2);
+		await runAutoSyncTick();
+		block = null;
+		fail = false;
+		await runAutoSyncTick();
+		expect(calls).toBe(2);
+		expect(getAutoSyncStatus().waitingForLogin).toBeNull();
+	});
+
+	test("resumes once a sync has succeeded since the pause, even with the block still set", async () => {
+		await runAutoSyncTick();
+		hoursLater(2);
+		recordSyncedRange({ startDate: "2026-11-01", endDate: "2026-11-01" }, "2026-11-01", clock);
+		fail = false;
+		await runAutoSyncTick();
+		expect(calls).toBe(2);
+	});
+
+	test("does not pause when the failure came without a block", async () => {
+		block = null;
+		await runAutoSyncTick();
+		expect(getAutoSyncStatus().waitingForLogin).toBeNull();
+		hoursLater(2);
+		await runAutoSyncTick();
+		expect(calls).toBe(2);
 	});
 });

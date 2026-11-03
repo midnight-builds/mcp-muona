@@ -309,7 +309,7 @@ let activeSyncFn: AutoSyncFn = syncReceipts;
 let nowFn: () => Date = () => new Date();
 let reloginBlockFn: () => string | null = getReloginBlock;
 
-async function tick(): Promise<void> {
+export async function runAutoSyncTick(): Promise<void> {
 	const now = nowFn();
 	const config = getAutoSyncConfig();
 	const decision = shouldRunNow(config, runtimeState, now);
@@ -356,11 +356,24 @@ export function startAutoSync(options: StartAutoSyncOptions = {}): void {
 	if (timer !== null) return;
 
 	timer = setInterval(() => {
-		tick().catch((error) => {
+		runAutoSyncTick().catch((error) => {
 			logger.error({ err: error }, "Auto-sync tick crashed unexpectedly");
 		});
 	}, TICK_INTERVAL_MS);
 	timer.unref?.();
+}
+
+// Tests drive runAutoSyncTick directly; this puts the module back to a fresh start.
+export function resetAutoSyncRuntime(): void {
+	stopAutoSync();
+	runtimeState.lastRun = null;
+	runtimeState.lastAttemptAt = null;
+	runtimeState.nextEligibleAt = null;
+	runtimeState.running = false;
+	runtimeState.loginPause = null;
+	activeSyncFn = syncReceipts;
+	nowFn = () => new Date();
+	reloginBlockFn = getReloginBlock;
 }
 
 export function stopAutoSync(): void {

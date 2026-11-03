@@ -134,8 +134,8 @@ dates asks S-Etukortti only for that day and the ones after it, starting a day e
 case a receipt shows up late. Usually that is yesterday and today; after the server has
 been off for a while, it is the whole gap. The very first sync fetches the last 14 days
 (automatic) or from the first day of the month two months ago (`sync_receipts`,
-`bun run sync`). A run where any receipt failed to download does not move that day, so
-the next run tries it again.
+`bun run sync`). A receipt whose details fail to download is tried again by every sync
+for 14 days; after that, only a sync with dates covering it fetches it.
 
 When the S-Etukortti session has expired and only you can renew it (one-time code or
 bank ID), automatic syncing pauses instead of asking S-Etukortti every hour for nothing;

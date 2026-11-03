@@ -7,7 +7,7 @@
 import * as z from "zod/v4";
 import type { ReceiptDetail, ReceiptSummary } from "../browser/s-etukortti.ts";
 import * as sEtukortti from "../browser/s-etukortti.ts";
-import { helsinkiTodayDate } from "../date-range.ts";
+import { helsinkiTodayDate, shiftDate } from "../date-range.ts";
 import { logger } from "../logger.ts";
 import { parseReceiptText } from "../receipt-text.ts";
 import {
@@ -128,8 +128,18 @@ export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 		}
 	}
 
+	// Recent receipts whose detail failed earlier are retried even outside
+	// this range: syncs without dates only cover the last day or two, and a
+	// detail retried for 14 days, as the old fixed window did, is then left to
+	// an explicit backfill rather than retried forever.
+	const today = options.today ?? helsinkiTodayDate();
 	const missingDetailIds = new Set(listReceiptsMissingDetail());
-	const toFetch = [...seenReceiptIds].filter((id) => missingDetailIds.has(id));
+	const toFetch = [
+		...new Set([
+			...[...seenReceiptIds].filter((id) => missingDetailIds.has(id)),
+			...listReceiptsMissingDetail(shiftDate(today, -13)),
+		]),
+	];
 
 	const parserMismatches: SyncSummary["parserMismatches"] = [];
 	const errors: SyncSummary["errors"] = [];
@@ -162,11 +172,9 @@ export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 		}
 	}
 
-	// A failed detail would fall outside the next run's shorter range and
-	// never be fetched, so only a clean run moves the coverage.
-	if (errors.length === 0) {
-		recordSyncedRange({ startDate, endDate }, options.today ?? helsinkiTodayDate(), new Date());
-	}
+	// Every receipt in the range is now listed; failed details don't hold the
+	// coverage back, since they are retried above while recent.
+	recordSyncedRange({ startDate, endDate }, today, new Date());
 
 	return SyncSummarySchema.parse({
 		months,

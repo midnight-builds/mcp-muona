@@ -199,7 +199,7 @@ describe("syncReceipts coverage", () => {
 		expect(getSyncCoverage()?.through).toBe("2026-11-03");
 	});
 
-	test("a run with a failed receipt detail records nothing, so the next run sees that receipt again", async () => {
+	test("a failed receipt detail does not hold coverage back", async () => {
 		const summary = makeSummary("123456_9", "2026-11-02T10:00:00+02:00", 3.98);
 		await syncReceipts({
 			startDate: "2026-11-01",
@@ -211,7 +211,88 @@ describe("syncReceipts coverage", () => {
 				throw new Error("HTTP 502");
 			},
 		});
-		expect(getSyncCoverage()).toBeNull();
+		expect(getSyncCoverage()?.through).toBe("2026-11-03");
+	});
+
+	test("a recent receipt whose detail failed is retried by a later run outside its range", async () => {
+		const failed = makeSummary("123456_9", "2026-10-28T10:00:00+02:00", 3.98);
+		await syncReceipts({
+			startDate: "2026-10-28",
+			endDate: "2026-10-28",
+			today: "2026-10-28",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [failed],
+			fetchReceipt: async () => {
+				throw new Error("HTTP 502");
+			},
+		});
+
+		const retried: string[] = [];
+		const result = await syncReceipts({
+			startDate: "2026-11-02",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [],
+			fetchReceipt: async (receiptId) => {
+				retried.push(receiptId);
+				return makeDetail(failed, 3.98);
+			},
+		});
+		expect(retried).toEqual(["123456_9"]);
+		expect(result.detailsFetched).toBe(1);
+	});
+
+	test("a receipt whose detail failed more than 14 days ago is left to an explicit backfill", async () => {
+		const old = makeSummary("123456_8", "2026-10-01T10:00:00+03:00", 3.98);
+		await syncReceipts({
+			startDate: "2026-10-01",
+			endDate: "2026-10-01",
+			today: "2026-10-01",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [old],
+			fetchReceipt: async () => {
+				throw new Error("HTTP 502");
+			},
+		});
+
+		const retried: string[] = [];
+		await syncReceipts({
+			startDate: "2026-11-02",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [],
+			fetchReceipt: async (receiptId) => {
+				retried.push(receiptId);
+				return makeDetail(old, 3.98);
+			},
+		});
+		expect(retried).toEqual([]);
+	});
+
+	test("an existing coverage advances past a run with a failed detail", async () => {
+		await syncReceipts({
+			startDate: "2026-11-01",
+			endDate: "2026-11-02",
+			today: "2026-11-02",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [],
+			fetchReceipt: async (receiptId) => {
+				throw new Error(`unexpected fetchReceipt(${receiptId})`);
+			},
+		});
+		await syncReceipts({
+			startDate: "2026-11-01",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [makeSummary("123456_7", "2026-11-03T09:00:00+02:00", 3.98)],
+			fetchReceipt: async () => {
+				throw new Error("HTTP 502");
+			},
+		});
+		expect(getSyncCoverage()?.through).toBe("2026-11-03");
 	});
 
 	test("a failing summary fetch records nothing", async () => {
