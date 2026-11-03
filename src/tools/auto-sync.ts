@@ -61,8 +61,10 @@ export function registerAutoSyncTools(server: McpServer): void {
 			annotations: LOCAL_READ,
 			description:
 				"Reports when receipts were last fetched automatically, whether it succeeded, and when " +
-				"the next automatic sync is due. See also s_etukortti_session_status for a broader " +
-				"health check.",
+				"the next automatic sync is due. `waitingForLogin` is set while auto-sync is paused " +
+				"because the S-Etukortti session expired and only a human login can renew it; it " +
+				"resumes by itself after that login. See also s_etukortti_session_status for a " +
+				"broader health check.",
 			inputSchema: z.object({}),
 		},
 		async () =>

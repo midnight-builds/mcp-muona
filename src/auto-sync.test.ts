@@ -12,12 +12,17 @@ import {
 	DEFAULT_AUTO_SYNC_CONFIG,
 	getAutoSyncConfig,
 	isWithinHelsinkiWindow,
+	type LoginPause,
 	last14DayRange,
+	pauseAfterAttempt,
 	runAutoSyncAttempt,
 	shouldRunNow,
+	stillPaused,
 	updateAutoSyncConfig,
 } from "./auto-sync.ts";
+import { SessionExpiredError } from "./browser/s-group/errors.ts";
 import { closeSettingsDb, setSetting } from "./store/settings.ts";
+import { recordSyncedRange } from "./store/sync-coverage.ts";
 
 let dbPath: string;
 
@@ -269,7 +274,40 @@ describe("runAutoSyncAttempt", () => {
 			at: now.toISOString(),
 			ok: false,
 			error: "Not logged in to s-etukortti.fi.",
+			sessionExpired: false,
 		});
+	});
+
+	test("marks a failure caused by an expired session", async () => {
+		const result = await runAutoSyncAttempt({
+			now,
+			syncFn: async () => {
+				throw new SessionExpiredError("blocked", "Relogin blocked until a human login.");
+			},
+		});
+		expect(result.ok).toBe(false);
+		expect(result.sessionExpired).toBe(true);
+	});
+
+	test("syncs only from the day before the covered day once coverage exists", async () => {
+		recordSyncedRange({ startDate: "2026-07-08", endDate: "2026-07-20" }, "2026-07-20", now);
+		let seen: { startDate: string; endDate: string; today?: string } | undefined;
+		await runAutoSyncAttempt({
+			now,
+			syncFn: async (options) => {
+				seen = options;
+				return {
+					months: ["2026-07"],
+					summariesUpserted: 0,
+					detailsFetched: 0,
+					parserMismatches: [],
+					errors: [],
+				};
+			},
+		});
+		expect(seen?.startDate).toBe("2026-07-19");
+		expect(seen?.endDate).toBe("2026-07-21");
+		expect(seen?.today).toBe("2026-07-21");
 	});
 
 	test("stringifies non-Error throws", async () => {
@@ -281,5 +319,41 @@ describe("runAutoSyncAttempt", () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(result.error).toBe("boom");
+	});
+});
+
+describe("login pause", () => {
+	const now = new Date("2026-11-01T06:00:00.000Z");
+	const failed = { at: now.toISOString(), ok: false, error: "x", sessionExpired: true };
+	const pause: LoginPause = { since: now.toISOString(), reason: "awaiting_otp" };
+
+	test("pauses after a session-expired failure while relogin is blocked", () => {
+		expect(pauseAfterAttempt(failed, "awaiting_otp", now)).toEqual(pause);
+	});
+
+	test("does not pause on a block alone: S-ostoslista sets it while S-Etukortti may still work", () => {
+		const succeeded = { at: now.toISOString(), ok: true, summariesUpserted: 1, detailsFetched: 0 };
+		expect(pauseAfterAttempt(succeeded, "awaiting_otp", now)).toBeNull();
+	});
+
+	test("does not pause on an expired session that relogin may still fix", () => {
+		expect(pauseAfterAttempt(failed, null, now)).toBeNull();
+	});
+
+	test("does not pause on other failures", () => {
+		expect(pauseAfterAttempt({ ...failed, sessionExpired: false }, "awaiting_otp", now)).toBeNull();
+	});
+
+	test("stays paused while the block is set and no sync has succeeded since", () => {
+		expect(stillPaused(pause, "awaiting_otp", null)).toBe(true);
+		expect(stillPaused(pause, "awaiting_otp", "2026-10-31T20:00:00.000Z")).toBe(true);
+	});
+
+	test("resumes once a human login clears the block", () => {
+		expect(stillPaused(pause, null, null)).toBe(false);
+	});
+
+	test("resumes once any sync has succeeded since the pause began", () => {
+		expect(stillPaused(pause, "awaiting_otp", "2026-11-01T07:30:00.000Z")).toBe(false);
 	});
 });

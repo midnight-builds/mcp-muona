@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReceiptDetail, ReceiptSummary } from "../browser/s-etukortti.ts";
 import { closeDb, getReceipt } from "./receipts-db.ts";
+import { closeSettingsDb } from "./settings.ts";
 import { syncReceipts } from "./sync.ts";
+import { getSyncCoverage } from "./sync-coverage.ts";
 
 let dbPath: string;
 
@@ -16,6 +18,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	closeDb();
+	closeSettingsDb();
 	for (const suffix of ["", "-wal", "-shm"]) {
 		const path = `${dbPath}${suffix}`;
 		if (existsSync(path)) rmSync(path);
@@ -178,5 +181,54 @@ describe("syncReceipts", () => {
 				},
 			}),
 		).rejects.toThrow();
+	});
+});
+
+describe("syncReceipts coverage", () => {
+	test("a clean run up to today records the covered day", async () => {
+		await syncReceipts({
+			startDate: "2026-11-01",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [],
+			fetchReceipt: async (receiptId) => {
+				throw new Error(`unexpected fetchReceipt(${receiptId})`);
+			},
+		});
+		expect(getSyncCoverage()?.through).toBe("2026-11-03");
+	});
+
+	test("a run with a failed receipt detail records nothing, so the next run sees that receipt again", async () => {
+		const summary = makeSummary("123456_9", "2026-11-02T10:00:00+02:00", 3.98);
+		await syncReceipts({
+			startDate: "2026-11-01",
+			endDate: "2026-11-03",
+			today: "2026-11-03",
+			fetchDelayMs: 0,
+			fetchReceipts: async () => [summary],
+			fetchReceipt: async () => {
+				throw new Error("HTTP 502");
+			},
+		});
+		expect(getSyncCoverage()).toBeNull();
+	});
+
+	test("a failing summary fetch records nothing", async () => {
+		await expect(
+			syncReceipts({
+				startDate: "2026-11-01",
+				endDate: "2026-11-03",
+				today: "2026-11-03",
+				fetchDelayMs: 0,
+				fetchReceipts: async () => {
+					throw new Error("HTTP 401");
+				},
+				fetchReceipt: async (receiptId) => {
+					throw new Error(`unexpected fetchReceipt(${receiptId})`);
+				},
+			}),
+		).rejects.toThrow("HTTP 401");
+		expect(getSyncCoverage()).toBeNull();
 	});
 });

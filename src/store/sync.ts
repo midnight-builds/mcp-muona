@@ -7,6 +7,7 @@
 import * as z from "zod/v4";
 import type { ReceiptDetail, ReceiptSummary } from "../browser/s-etukortti.ts";
 import * as sEtukortti from "../browser/s-etukortti.ts";
+import { helsinkiTodayDate } from "../date-range.ts";
 import { logger } from "../logger.ts";
 import { parseReceiptText } from "../receipt-text.ts";
 import {
@@ -14,6 +15,7 @@ import {
 	saveReceiptDetail,
 	upsertReceiptSummary,
 } from "./receipts-db.ts";
+import { recordSyncedRange } from "./sync-coverage.ts";
 
 export const SyncSummarySchema = z.object({
 	months: z.array(z.string()),
@@ -37,6 +39,8 @@ export interface SyncOptions {
 	fetchDelayMs?: number;
 	fetchReceipts?: (startDate: string, endDate: string) => Promise<ReceiptSummary[]>;
 	fetchReceipt?: (receiptId: string) => Promise<ReceiptDetail>;
+	/** Helsinki calendar date treated as today (default: the real one). */
+	today?: string;
 }
 
 interface MonthChunk {
@@ -156,6 +160,12 @@ export async function syncReceipts(options: SyncOptions): Promise<SyncSummary> {
 			logger.error({ err: error, receiptId }, "Failed to sync receipt detail");
 			errors.push({ receiptId, message });
 		}
+	}
+
+	// A failed detail would fall outside the next run's shorter range and
+	// never be fetched, so only a clean run moves the coverage.
+	if (errors.length === 0) {
+		recordSyncedRange({ startDate, endDate }, options.today ?? helsinkiTodayDate(), new Date());
 	}
 
 	return SyncSummarySchema.parse({

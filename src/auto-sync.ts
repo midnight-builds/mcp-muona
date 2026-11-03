@@ -1,18 +1,23 @@
-// Background scheduler that periodically syncs the last two weeks of
-// receipts without any user action, so the local database stays fresh
-// between manual syncs. Runs on a 60-second tick, only actually syncing when
-// enabled, not already running, past the configured interval, and inside the
-// configured Helsinki-time-of-day window (to avoid syncing at odd hours).
+// Background scheduler that periodically syncs new receipts without any user
+// action, so the local database stays fresh between manual syncs. Each run asks
+// only for the days since the covered day (see store/sync-coverage.ts), not a
+// fixed window, so routine runs don't re-read weeks from S-Etukortti. Runs on a
+// 60-second tick, only actually syncing when enabled, not already running, past
+// the configured interval, inside the configured Helsinki-time-of-day window
+// (to avoid syncing at odd hours), and not paused waiting for a human login.
 //
 // The decision logic (window checks, next-run computation, run/skip
 // gating) is factored out into pure functions of explicit inputs so it can
 // be unit-tested without real timers or a real syncReceipts call.
 
 import * as z from "zod/v4";
+import { SessionExpiredError } from "./browser/s-group/errors.ts";
+import { getReloginBlock } from "./browser/s-group/store.ts";
 import { formatHelsinkiDate, type HelsinkiDate } from "./date-range.ts";
 import { logger } from "./logger.ts";
 import { getSetting, setSetting } from "./store/settings.ts";
 import { type SyncOptions, type SyncSummary, syncReceipts } from "./store/sync.ts";
+import { getSyncCoverage, incrementalSyncRange } from "./store/sync-coverage.ts";
 
 export interface AutoSyncConfig {
 	enabled: boolean;
@@ -203,21 +208,28 @@ export interface AutoSyncLastRun {
 	summariesUpserted?: number;
 	detailsFetched?: number;
 	error?: string;
+	sessionExpired?: boolean;
 }
 
 export type AutoSyncFn = (options: SyncOptions) => Promise<SyncSummary>;
 
-// Runs one sync attempt over the last 14 days and turns the outcome into a
-// lastRun record. Never throws: failures (including SessionExpiredError from
-// a missing/expired login) are captured as `{ok: false, error}` so the
-// caller can just record the result and wait for the next interval.
+// Runs one sync attempt from the day before the covered day (the last 14 days
+// until anything is covered) and turns the outcome into a lastRun record.
+// Never throws: failures (including SessionExpiredError from a missing/expired
+// login) are captured as `{ok: false, error}` so the caller can just record
+// the result and wait for the next interval.
 export async function runAutoSyncAttempt(params: {
 	now: Date;
 	syncFn: AutoSyncFn;
 }): Promise<AutoSyncLastRun> {
-	const { startDate, endDate } = last14DayRange(params.now);
+	const today = formatHelsinkiDate(helsinkiDateParts(params.now));
+	const { startDate, endDate, basis } = incrementalSyncRange(
+		today,
+		last14DayRange(params.now).startDate,
+	);
+	logger.info({ startDate, endDate, basis }, "Auto-sync attempt");
 	try {
-		const summary = await params.syncFn({ startDate, endDate, fetchDelayMs: 400 });
+		const summary = await params.syncFn({ startDate, endDate, today, fetchDelayMs: 400 });
 		return {
 			at: params.now.toISOString(),
 			ok: true,
@@ -227,8 +239,42 @@ export async function runAutoSyncAttempt(params: {
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logger.warn({ err: error }, "Auto-sync attempt failed");
-		return { at: params.now.toISOString(), ok: false, error: message };
+		return {
+			at: params.now.toISOString(),
+			ok: false,
+			error: message,
+			sessionExpired: error instanceof SessionExpiredError,
+		};
 	}
+}
+
+export interface LoginPause {
+	since: string;
+	reason: string;
+}
+
+// Pauses only when a run actually failed on the session and relogin is
+// blocked until a human: every further run would then fetch a token from
+// S-Etukortti just to fail. The block alone is not enough, since an
+// S-ostoslista login sets it too while S-Etukortti may still work.
+export function pauseAfterAttempt(
+	lastRun: AutoSyncLastRun,
+	blockedReason: string | null,
+	now: Date,
+): LoginPause | null {
+	if (lastRun.ok || lastRun.sessionExpired !== true || blockedReason === null) return null;
+	return { since: now.toISOString(), reason: blockedReason };
+}
+
+// A human login clears the block; a sync that succeeded since the pause began
+// (e.g. a manual sync_receipts) proves the session works even if it didn't.
+export function stillPaused(
+	pause: LoginPause,
+	blockedReason: string | null,
+	lastSyncSuccessAt: string | null,
+): boolean {
+	if (blockedReason === null) return false;
+	return lastSyncSuccessAt === null || lastSyncSuccessAt <= pause.since;
 }
 
 export interface AutoSyncStatus {
@@ -237,6 +283,7 @@ export interface AutoSyncStatus {
 	running: boolean;
 	nextEligibleAt: string | null;
 	nextRunInWindowAt: string;
+	waitingForLogin: LoginPause | null;
 }
 
 interface RuntimeState {
@@ -244,6 +291,7 @@ interface RuntimeState {
 	lastAttemptAt: string | null;
 	nextEligibleAt: string | null;
 	running: boolean;
+	loginPause: LoginPause | null;
 }
 
 const runtimeState: RuntimeState = {
@@ -251,6 +299,7 @@ const runtimeState: RuntimeState = {
 	lastAttemptAt: null,
 	nextEligibleAt: null,
 	running: false,
+	loginPause: null,
 };
 
 const TICK_INTERVAL_MS = 60_000;
@@ -258,6 +307,7 @@ const TICK_INTERVAL_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let activeSyncFn: AutoSyncFn = syncReceipts;
 let nowFn: () => Date = () => new Date();
+let reloginBlockFn: () => string | null = getReloginBlock;
 
 async function tick(): Promise<void> {
 	const now = nowFn();
@@ -265,10 +315,26 @@ async function tick(): Promise<void> {
 	const decision = shouldRunNow(config, runtimeState, now);
 	if (!decision.run) return;
 
+	const pause = runtimeState.loginPause;
+	if (pause !== null) {
+		// nextEligibleAt stays put, so the first tick after the login runs.
+		if (stillPaused(pause, reloginBlockFn(), getSyncCoverage()?.at ?? null)) return;
+		runtimeState.loginPause = null;
+		logger.info({ pausedSince: pause.since }, "Auto-sync resumed: the session works again");
+	}
+
 	runtimeState.running = true;
 	runtimeState.lastAttemptAt = now.toISOString();
 	try {
-		runtimeState.lastRun = await runAutoSyncAttempt({ now, syncFn: activeSyncFn });
+		const lastRun = await runAutoSyncAttempt({ now, syncFn: activeSyncFn });
+		runtimeState.lastRun = lastRun;
+		runtimeState.loginPause = pauseAfterAttempt(lastRun, reloginBlockFn(), now);
+		if (runtimeState.loginPause !== null) {
+			logger.info(
+				{ reason: runtimeState.loginPause.reason },
+				"Auto-sync paused until a human finishes the S-Etukortti login",
+			);
+		}
 	} finally {
 		runtimeState.running = false;
 		runtimeState.nextEligibleAt = computeNextEligibleAt(now, config.intervalMinutes).toISOString();
@@ -278,6 +344,7 @@ async function tick(): Promise<void> {
 export interface StartAutoSyncOptions {
 	syncFn?: AutoSyncFn;
 	now?: () => Date;
+	reloginBlock?: () => string | null;
 }
 
 // Idempotent: calling this more than once (e.g. across warmup retries) just
@@ -285,6 +352,7 @@ export interface StartAutoSyncOptions {
 export function startAutoSync(options: StartAutoSyncOptions = {}): void {
 	if (options.syncFn) activeSyncFn = options.syncFn;
 	if (options.now) nowFn = options.now;
+	if (options.reloginBlock) reloginBlockFn = options.reloginBlock;
 	if (timer !== null) return;
 
 	timer = setInterval(() => {
@@ -317,5 +385,6 @@ export function getAutoSyncStatus(now: Date = nowFn()): AutoSyncStatus {
 		running: runtimeState.running,
 		nextEligibleAt: runtimeState.nextEligibleAt,
 		nextRunInWindowAt: computeNextRunInWindowAt(baseline, config).toISOString(),
+		waitingForLogin: runtimeState.loginPause,
 	};
 }
