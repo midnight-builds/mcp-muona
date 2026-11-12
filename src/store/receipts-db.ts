@@ -334,17 +334,24 @@ export function reparseStored(parse: (rawText: string) => ParsedReceipt): {
 	return { reparsed: parsed.length, parserOk };
 }
 
+// SQLite's LOWER() and LIKE fold case for ASCII only, so "jää" would never match
+// the receipts' "JÄÄ". Fold the Finnish/Swedish letters in SQL and lowercase the
+// needle in JS, which handles all of Unicode.
+function foldedLower(column: string): string {
+	return `REPLACE(REPLACE(REPLACE(LOWER(${column}), 'Ä', 'ä'), 'Ö', 'ö'), 'Å', 'å')`;
+}
+
 export function searchItems(query: SearchItemsQuery): SearchItemResult[] {
 	const conditions: string[] = [];
 	const params: SQLQueryBindings[] = [];
 
 	if (query.nameLike) {
-		conditions.push("LOWER(ri.name) LIKE LOWER(?)");
-		params.push(`%${query.nameLike}%`);
+		conditions.push(`${foldedLower("ri.name")} LIKE ?`);
+		params.push(`%${query.nameLike.toLowerCase()}%`);
 	}
 	if (query.store) {
-		conditions.push("LOWER(r.place_of_business_name) LIKE LOWER(?)");
-		params.push(`%${query.store}%`);
+		conditions.push(`${foldedLower("r.place_of_business_name")} LIKE ?`);
+		params.push(`%${query.store.toLowerCase()}%`);
 	}
 	if (query.startDate) {
 		conditions.push("r.transaction_start >= ?");
