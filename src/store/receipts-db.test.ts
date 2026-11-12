@@ -168,7 +168,10 @@ describe("searchItems", () => {
 			}),
 		);
 		saveReceiptDetail("123456_2", "raw 2", {
-			items: [{ name: "MAITO KEVYT", total: 1.29, notes: [] }],
+			items: [
+				{ name: "MAITO KEVYT", total: 1.29, notes: [] },
+				{ name: "JÄÄSALAATTI 100G", total: 1.39, notes: [] },
+			],
 			total: 1.29,
 			storeHeader: null,
 			unparsedLines: [],
@@ -181,20 +184,32 @@ describe("searchItems", () => {
 		expect(results[0]?.name).toBe("BANAANI CHIQUITA");
 	});
 
+	test("matches Ä/Ö/Å case-insensitively in nameLike", () => {
+		for (const nameLike of ["jääsalaatti", "Jääsalaatti", "JÄÄSALAATTI"]) {
+			const results = searchItems({ nameLike });
+			expect(results.map((r) => r.name)).toEqual(["JÄÄSALAATTI 100G"]);
+		}
+	});
+
 	test("filters by date range", () => {
 		const results = searchItems({ startDate: "2026-06-01", endDate: "2026-06-30" });
-		expect(results).toHaveLength(1);
-		expect(results[0]?.receiptId).toBe("123456_2");
+		expect(results).toHaveLength(2);
+		expect(results.every((r) => r.receiptId === "123456_2")).toBe(true);
+	});
+
+	test("matches Ä/Ö/Å case-insensitively in store", () => {
+		const results = searchItems({ store: "TESTILÄ" });
+		expect(results.map((r) => r.store)).toEqual(["S-market Testilä"]);
 	});
 
 	test("filters by store, case-insensitively", () => {
 		const results = searchItems({ store: "prisma" });
-		expect(results).toHaveLength(1);
+		expect(results).toHaveLength(2);
 		expect(results[0]?.store).toBe("Prisma Kotka");
 	});
 
 	test("returns everything when no filters are given", () => {
-		expect(searchItems({})).toHaveLength(2);
+		expect(searchItems({})).toHaveLength(3);
 	});
 
 	test("respects limit", () => {
